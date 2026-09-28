@@ -1,12 +1,12 @@
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { MAX_BUILDER_TURNS } from "@/lib/builder-constants";
 import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
 
-// process.env.GEMINI_MODEL lets this be pinned to a specific dated model
-// later without a code change; "gemini-flash-latest" tracks Google's
-// current flash model so this doesn't go stale on its own.
-const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
+// process.env.GROQ_MODEL lets this be swapped without a code change;
+// "openai/gpt-oss-120b" is confirmed available on our Groq account
+// (llama-3.3-70b-versatile 404'd — account doesn't have that tier).
+const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 // ============ TESTING SCAFFOLD — remove once a real provider is funded ============
 // AI_MOCK_MODE=true in .env.local bypasses DeepSeek entirely so the builder
@@ -123,52 +123,67 @@ export async function POST(request: Request) {
   }
   // ============ end testing scaffold ============
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: "GEMINI_API_KEY is not set. Add it to .env.local before the builder can ask questions." },
+      { error: "GROQ_API_KEY is not set. Add it to .env.local before the builder can ask questions." },
       { status: 500 },
     );
   }
 
-  const prompt = `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
+  // Groq's JSON object mode requires the response shape to be spelled out
+  // explicitly in the prompt — there's no separate schema param for it.
+  const systemPrompt = `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
 Persona for this conversation: ${CONTEXT_PERSONA[context]}
-
-Conversation so far:
-${buildTranscript(conversation)}
 
 Ask ONE next question that fits naturally after what's already been asked — don't repeat a topic already covered by an answered or declined question, but you may gently re-approach a "skipped for now" topic later if it fits.
 If you now have enough answers (roughly 8-12 exchanges, or clearly enough to build a good profile), set "done" to true instead of asking another question.
 If a short set of quick-reply choices would help (e.g. an age range, a yes/no, a short list of options), include 2-6 short options in "quickReplies" — otherwise omit it.
-Keep the question short, conversational, and in character. Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.`;
+Keep the question short, conversational, and in character. Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
 
-  const ai = new GoogleGenAI({ apiKey });
+Respond with ONLY a json object, no other text, matching this exact shape:
+{"done": false, "question": "your next question here", "quickReplies": ["optional", "short", "options"]}
+or, once you have enough:
+{"done": true}`;
 
-  const RESPONSE_SCHEMA = {
-    type: "object",
-    properties: {
-      done: { type: "boolean" },
-      question: { type: "string" },
-      quickReplies: { type: "array", items: { type: "string" } },
-    },
-    required: ["done"],
-  };
+  const userPrompt = `Conversation so far:\n${buildTranscript(conversation)}`;
 
-  try {
-    // Verified against the installed @google/genai package's own type
-    // definitions (not just docs) before writing this: response_format is
-    // an interactions-API-only field and doesn't exist here — the
-    // generateContent config uses responseMimeType/responseJsonSchema.
-    const response = await ai.models.generateContent({
+  const client = new OpenAI({
+    baseURL: "https://api.groq.com/openai/v1",
+    apiKey,
+  });
+
+  async function askOnce(extraInstruction?: string) {
+    const completion = await client.chat.completions.create({
       model: MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseJsonSchema: RESPONSE_SCHEMA,
-      },
+      messages: [
+        {
+          role: "system",
+          content: extraInstruction ? `${systemPrompt}\n\n${extraInstruction}` : systemPrompt,
+        },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 1,
+      top_p: 1,
+      // Generous headroom: reasoning_effort spends part of this budget on
+      // hidden reasoning tokens before the visible JSON is emitted, so a
+      // tight cap here truncates the JSON output mid-object.
+      max_completion_tokens: 600,
+      reasoning_effort: "medium",
     });
 
-    const parsed = JSON.parse(response.text ?? "{}");
+    const raw = completion.choices[0]?.message?.content?.trim() || "{}";
+    return JSON.parse(raw);
+  }
+
+  try {
+    let parsed;
+    try {
+      parsed = await askOnce();
+    } catch {
+      parsed = await askOnce("Keep your response concise and ensure the JSON is complete and valid.");
+    }
     return NextResponse.json({
       done: Boolean(parsed.done),
       question: typeof parsed.question === "string" ? parsed.question : undefined,

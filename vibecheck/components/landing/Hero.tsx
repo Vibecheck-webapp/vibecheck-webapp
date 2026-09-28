@@ -26,12 +26,20 @@ function PrimaryButton({ children, href }: { children: ReactNode; href?: string 
   );
 }
 
-function SecondaryButton({ children }: { children: ReactNode }) {
+function SecondaryButton({ children, href }: { children: ReactNode; href?: string }) {
+  const className =
+    "flex h-[44.7px] w-61.75 items-center justify-center rounded-[14px] border border-[#2A2726] bg-transparent pt-[11.86px] pr-[15.57px] pb-[11.85px] pl-[15.57px] text-center font-inter text-[16px] leading-[100%] font-extrabold tracking-normal text-white";
+
+  if (href) {
+    return (
+      <Link href={href} className={className}>
+        {children}
+      </Link>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      className="flex h-[44.7px] w-61.75 items-center justify-center rounded-[14px] border border-[#2A2726] bg-transparent pt-[11.86px] pr-[15.57px] pb-[11.85px] pl-[15.57px] text-center font-inter text-[16px] leading-[100%] font-extrabold tracking-normal text-white"
-    >
+    <button type="button" className={className}>
       {children}
     </button>
   );
@@ -91,7 +99,7 @@ export function Hero() {
 
           <div className="flex flex-col items-start gap-3 sm:flex-row">
             <PrimaryButton href="/create">Create my Vibecheck </PrimaryButton>
-            <SecondaryButton>Preview sample Vibecheck</SecondaryButton>
+            <SecondaryButton href="/preview">Preview Orla&apos;s Vibecheck</SecondaryButton>
           </div>
 
           <p className="font-inter text-[12px] leading-normal font-normal text-[#716B67]">

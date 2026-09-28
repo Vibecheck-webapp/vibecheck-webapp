@@ -23,6 +23,16 @@ export const CONTEXT_COVER_CLASS: Record<ProfileContext, string> = {
   get_to_know: "bg-gradient-to-br from-[#8FE3B0] to-[#06251C] text-[#F4FBF6]",
 };
 
+// The same three color pairs as CONTEXT_COVER_CLASS, as raw hex rather than
+// a fixed Tailwind gradient class — for callers (the story viewer) that
+// need to vary the gradient's angle per slide while still only ever using
+// these established colors, never inventing new ones.
+export const CONTEXT_GRADIENT_COLORS: Record<ProfileContext, { from: string; to: string }> = {
+  dating: { from: "#FF6961", to: "#7D0B0E" },
+  friendship: { from: "#FF96C3", to: "#87435E" },
+  get_to_know: { from: "#8FE3B0", to: "#06251C" },
+};
+
 export const VISIBILITY_COPY: Record<ProfileVisibility, { label: string; description: string }> = {
   public: {
     label: "Public",

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ResumeDraftPrompt } from "@/components/builder/ResumeDraftPrompt";
 import { BetaFooter } from "@/components/ui/BetaFooter";
 import { Pill } from "@/components/ui/Pill";
 import type { ProfileContext } from "@/lib/supabase/types";
@@ -67,6 +68,7 @@ function ArrowLeftIcon() {
 export default function CreatePage() {
   return (
     <section className="mx-auto w-full max-w-[1100px] px-6 py-12 lg:px-10 lg:py-16">
+      <ResumeDraftPrompt />
       <div className="flex flex-col items-start gap-3">
         <Link
           href="/"
