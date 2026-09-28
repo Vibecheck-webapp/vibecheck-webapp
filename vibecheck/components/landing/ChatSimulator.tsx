@@ -74,7 +74,7 @@ function buildFinalItems(): VisibleItem[] {
 // navigation never creates a new one. So once the page had been reloaded
 // even once, that check stayed "true" for every navigation afterward,
 // replaying the animation on every single visit instead of just once.
-let hasPlayedThisSession = false;
+let hasPlayedThisLoad = false;
 
 // Shared shape/color so a typing indicator always matches the sender's
 // real message bubble — no separate style to drift out of sync.
@@ -134,27 +134,38 @@ interface ChatSimulatorProps {
 }
 
 export function ChatSimulator({ loop = false }: ChatSimulatorProps) {
-  const [visibleItems, setVisibleItems] = useState<VisibleItem[]>([]);
+  // Read exactly ONCE, via a lazy initializer — never re-read inside the
+  // effect below. React Strict Mode (dev only) invokes this component's
+  // effect twice per mount (setup -> cleanup -> setup); if the effect body
+  // re-read the module flag fresh each time instead, whichever of those two
+  // invocations set it first would make the OTHER one (including the real,
+  // surviving one) see it as already-played and skip its own animation. A
+  // lazy initializer runs exactly once, during this mount's first render,
+  // strictly before either effect invocation — so both invocations agree on
+  // the same skipAnimation value for this mount's entire lifetime.
+  const [skipAnimation] = useState(() => !loop && hasPlayedThisLoad);
+  const [visibleItems, setVisibleItems] = useState<VisibleItem[]>(() =>
+    skipAnimation ? buildFinalItems() : [],
+  );
   const [typingFrom, setTypingFrom] = useState<Sender | null>(null);
-  const [isReplay, setIsReplay] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
-    // Skip straight to the finished conversation on any mount after the
-    // first — this only ever runs again on a genuine remount, which either
-    // means a real page reload (hasPlayedThisSession has been reset to
-    // false along with it, so this branch is skipped and it plays) or a
-    // client-side navigation back to "/" after already having played.
-    // useLayoutEffect (not useEffect) so that swap happens before paint:
-    // both the server render and this component's first render always
-    // start from an empty log (matching, so no hydration mismatch), and
-    // this decides which way to go before the user ever sees the empty
-    // state.
-    if (!loop && hasPlayedThisSession) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsReplay(true);
-      setVisibleItems(buildFinalItems());
-      return;
+    // The finished chat was already set via the lazy initializers above —
+    // both the server render and this component's very first client render
+    // agree on it (skipAnimation is derived from module state that doesn't
+    // exist during SSR, so the server always renders the empty/playing
+    // state — see the hydration note below), so there's nothing left for
+    // this effect to do on a skipped mount.
+    if (skipAnimation) return;
+
+    // Set synchronously, not after an await: since skipAnimation is no
+    // longer read here (only written), it's safe for both of Strict Mode's
+    // dev-only double-invoked effect calls to set this — neither can affect
+    // what THIS mount displays, only what the NEXT mount's lazy initializer
+    // sees.
+    if (!loop) {
+      hasPlayedThisLoad = true;
     }
 
     // A plain closure variable, not a ref: React Strict Mode runs this
@@ -172,17 +183,6 @@ export function ChatSimulator({ loop = false }: ChatSimulatorProps) {
         setTypingFrom(null);
         await sleep(INITIAL_DELAY_MS);
         if (cancelled) return;
-
-        // Marked here, not at the top of the effect: React Strict Mode's
-        // dev-only double-invoke cancels its first pass synchronously,
-        // before this delay ever resolves — so only a real, surviving
-        // invocation ever reaches this line. Marking it earlier caused the
-        // throwaway first pass to set the flag before being cancelled,
-        // making the real pass think it had already played and skip
-        // straight to the static end state instead of animating at all.
-        if (!loop) {
-          hasPlayedThisSession = true;
-        }
 
         for (const step of SCRIPT) {
           if (cancelled) return;
@@ -211,15 +211,15 @@ export function ChatSimulator({ loop = false }: ChatSimulatorProps) {
     return () => {
       cancelled = true;
     };
-  }, [loop]);
+  }, [loop, skipAnimation]);
 
   useEffect(() => {
-    if (isReplay) return;
+    if (skipAnimation) return;
     // No inner scroll container: this scrolls the actual page to reveal each
     // new bubble as it lands, the way a growing feed does, instead of boxing
     // the conversation into its own scrollbar.
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [visibleItems, typingFrom, isReplay]);
+  }, [visibleItems, typingFrom, skipAnimation]);
 
   return (
     <section className="flex flex-col items-center gap-8 px-6 py-16 lg:gap-12 lg:py-28">
