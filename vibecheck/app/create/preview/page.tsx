@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { StoryViewer } from "@/components/viewer/StoryViewer";
 import { UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
 import { buildStorySlidesFromDraft } from "@/lib/build-story-slides";
-import { loadDraft, type GuestDraft } from "@/lib/guest-draft";
+import { hasFinishedDraft, loadDraft, type GuestDraft } from "@/lib/guest-draft";
 
 // StoryViewer's own wrapper still contributes this much vertical padding
 // around the card even in ownerPreview mode (py-8 on mobile, sm:py-6 on
@@ -58,7 +58,12 @@ export default function CreatePreviewPage() {
       router.replace("/create?notice=age-restricted");
       return;
     }
-    if (!existing.summary || !existing.summary.name?.trim()) {
+    // Shared with the home page's CTA (lib/guest-draft.ts) so the two
+    // never disagree about what counts as a finished vibe — this also
+    // tightens the old inline check here, which didn't require a minimum
+    // slide count the way /create/summary's own "Continue" button already
+    // does before a user can ever reach this page normally.
+    if (!hasFinishedDraft(existing)) {
       router.replace("/create/summary");
       return;
     }

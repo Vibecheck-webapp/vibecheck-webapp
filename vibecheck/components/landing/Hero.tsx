@@ -2,10 +2,12 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { BetaFooter } from "@/components/ui/BetaFooter";
 import { Pill } from "@/components/ui/Pill";
+import { clearDraft, hasFinishedDraft, loadDraft } from "@/lib/guest-draft";
 
 function PrimaryButton({ children, href }: { children: ReactNode; href?: string }) {
   const className =
@@ -46,8 +48,31 @@ function SecondaryButton({ children, href }: { children: ReactNode; href?: strin
 }
 
 export function Hero() {
+  const router = useRouter();
   const sectionRef = useRef<HTMLElement>(null);
   const [isVisible, setIsVisible] = useState(false);
+  // Defaults to "/create" so the very first client render matches the
+  // server render exactly (localStorage isn't readable during SSR or
+  // before mount) — this switches to "/create/preview" in the effect
+  // below, after mount, once a finished draft is actually confirmed.
+  const [createHref, setCreateHref] = useState("/create");
+  const [showStartNew, setShowStartNew] = useState(false);
+
+  useEffect(() => {
+    if (hasFinishedDraft(loadDraft())) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCreateHref("/create/preview");
+      setShowStartNew(true);
+    }
+  }, []);
+
+  function handleStartNew() {
+    if (!window.confirm("This deletes your current Vibecheck")) return;
+    clearDraft();
+    setCreateHref("/create");
+    setShowStartNew(false);
+    router.push("/create");
+  }
 
   useEffect(() => {
     const node = sectionRef.current;
@@ -98,9 +123,19 @@ export function Hero() {
           </p>
 
           <div className="flex flex-col items-start gap-3 sm:flex-row">
-            <PrimaryButton href="/create">Create my Vibecheck </PrimaryButton>
+            <PrimaryButton href={createHref}>Create my Vibecheck </PrimaryButton>
             <SecondaryButton href="/preview">Preview Orla&apos;s Vibecheck</SecondaryButton>
           </div>
+
+          {showStartNew && (
+            <button
+              type="button"
+              onClick={handleStartNew}
+              className="font-inter text-[13px] font-semibold text-[#716B67] underline decoration-[#716B67]/50 underline-offset-2 hover:text-[#9A928C]"
+            >
+              Start a new Vibecheck
+            </button>
+          )}
 
           <p className="font-inter text-[12px] leading-normal font-normal text-[#716B67]">
             1 free Vibecheck · more profiles are 1 credit each · 1 credit = $1

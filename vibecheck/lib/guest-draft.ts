@@ -132,6 +132,17 @@ export function saveDraft(draft: GuestDraft) {
   }
 }
 
+// The single predicate for "is this draft finished enough to preview" —
+// shared by /create/preview's own access guard and the home page's CTA, so
+// the two can never disagree about what counts as a finished vibe. A draft
+// can never satisfy this while also being an under-18 dating draft: that
+// case is blocked in the builder before a second (non-scripted) answer is
+// even possible, so /create/summary's own guard (which requires at least 2
+// usable answers) already keeps such a draft from ever getting a summary.
+export function hasFinishedDraft(draft: GuestDraft | null): boolean {
+  return !!draft && !!draft.summary && !!draft.summary.name?.trim() && draft.summary.slides.length >= 2;
+}
+
 export function clearDraft() {
   if (typeof window === "undefined") return;
   try {
