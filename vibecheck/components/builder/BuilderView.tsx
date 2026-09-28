@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MAX_BUILDER_TURNS, SCRIPTED_OPENING_QUESTIONS, UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
@@ -29,6 +29,13 @@ export function BuilderView() {
   const [skipMenuOpen, setSkipMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  // Whether the user is currently scrolled near the bottom — a ref (not
+  // state) so tracking it doesn't itself cause re-renders.
+  const isNearBottomRef = useRef(true);
+  // Forces the next auto-scroll even if the user had scrolled up, since they
+  // just took an action that should bring them back to the live edge.
+  const justActedRef = useRef(false);
 
   // Resume an in-progress draft if one exists; otherwise start a fresh one
   // from the ?context= the picker sent us. Runs once on mount only.
@@ -111,8 +118,40 @@ export function BuilderView() {
     fetchNextQuestion(draft);
   }, [draft, pending, isDone, isThinking, error, ageBlocked, fetchNextQuestion]);
 
+  // Tracks how close to the bottom the log currently is, so a message
+  // arriving while the user has scrolled up to re-read something doesn't
+  // yank them back down.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const el = logRef.current;
+    if (!el) return;
+    function handleScroll() {
+      const distanceFromBottom = el!.scrollHeight - el!.scrollTop - el!.clientHeight;
+      isNearBottomRef.current = distanceFromBottom < 120;
+    }
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [draft]);
+
+  // Re-pins the log to the bottom after every append — the user's own
+  // message, the AI's reply, and the typing indicator appearing or
+  // disappearing all change scrollHeight (and, since the input area and the
+  // log share a fixed-height parent, the log's own clientHeight shifts too
+  // whenever quick-reply chips show up or go away) and land here.
+  // useLayoutEffect (not useEffect) runs synchronously after the DOM
+  // updates but before the browser paints, so the corrected position is
+  // what actually gets painted — no flash of the old position followed by
+  // a visible catch-up. Setting scrollTop directly (not
+  // bottomRef.scrollIntoView) targets only this container, not the window,
+  // and doing it instantly (not an animated "smooth" scroll) means a rapid
+  // follow-up change (e.g. the chip row appearing right as a reply lands)
+  // can't interrupt an in-flight animation — that's what read as a "jump."
+  useLayoutEffect(() => {
+    const el = logRef.current;
+    if (!el) return;
+    if (isNearBottomRef.current || justActedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    justActedRef.current = false;
   }, [draft?.conversation.length, pending, isThinking]);
 
   function commitTurn(turn: DraftTurn) {
@@ -140,6 +179,7 @@ export function BuilderView() {
     // age in friendship/get_to_know is informational only.
     const isAgeQuestion = draft.conversation.length === 1;
 
+    justActedRef.current = true;
     commitTurn({
       question: pending.question,
       answer,
@@ -166,6 +206,7 @@ export function BuilderView() {
 
   function handleSkip(status: "skipped_for_now" | "excluded") {
     if (!pending) return;
+    justActedRef.current = true;
     commitTurn({
       question: pending.question,
       answer: null,
@@ -224,7 +265,7 @@ export function BuilderView() {
           </span>
         </div>
 
-        <div className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5">
+        <div ref={logRef} className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5">
           {draft.conversation.map((turn, i) => (
             <div key={i} className="flex flex-col gap-2">
               <AiBubble text={turn.question} />
