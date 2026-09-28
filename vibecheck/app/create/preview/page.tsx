@@ -1,30 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StoryViewer } from "@/components/viewer/StoryViewer";
 import { UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
 import { buildStorySlidesFromDraft } from "@/lib/build-story-slides";
 import { loadDraft, type GuestDraft } from "@/lib/guest-draft";
 
+// StoryViewer's own wrapper still contributes this much vertical padding
+// around the card even in ownerPreview mode (py-8 on mobile, sm:py-6 on
+// desktop — this uses the larger mobile figure everywhere, which is safe:
+// worst case the card comes out a little shorter than strictly necessary
+// on desktop, never taller than the available space). A little extra
+// breathing room is added on top for the gap before the button row.
+const STORY_WRAPPER_VERTICAL_PADDING = 64;
+const EXTRA_BREATHING_ROOM = 24;
+const CARD_MIN = 420;
+const CARD_MAX = 640;
+
 export default function CreatePreviewPage() {
   const router = useRouter();
   const [draft, setDraft] = useState<GuestDraft | null>(null);
-  // The site navbar (rendered by the root layout, not this page) is itself
-  // `position: sticky`, not part of a flex column this page controls, so a
-  // `fixed` action bar at top:0 floats right over it. Measured instead of
-  // hardcoded, since its height already varies by breakpoint.
+  const actionRowRef = useRef<HTMLDivElement>(null);
+
+  // Both measured, not guessed — the navbar's height varies by breakpoint,
+  // and the action row's height depends on its own content (the no-photo
+  // notice adds a line), so neither is a constant this page can hardcode.
   const [navHeight, setNavHeight] = useState(0);
+  const [actionRowHeight, setActionRowHeight] = useState(0);
 
   useEffect(() => {
-    function measureNav() {
+    function measure() {
       const nav = document.querySelector("nav");
       setNavHeight(nav ? nav.getBoundingClientRect().height : 0);
+      setActionRowHeight(actionRowRef.current?.getBoundingClientRect().height ?? 0);
     }
-    measureNav();
-    window.addEventListener("resize", measureNav);
-    return () => window.removeEventListener("resize", measureNav);
-  }, []);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [draft]);
 
   // Reads the draft once, on mount only — no API calls on this page. A
   // fresh mount (e.g. navigating back here from "Edit") re-reads it, which
@@ -54,63 +68,63 @@ export default function CreatePreviewPage() {
 
   if (!draft) return null;
 
-  // ctaHref: the viewer's end-slide button is meant for OTHER people
-  // viewing this story ("Create my own Vibecheck"), but this is the
-  // owner's own preview of their not-yet-saved story — sending them to
-  // "/create/preview" just re-shows the same page, harmlessly, instead of
-  // routing the owner back into the picker mid-review. The real public
-  // viewer page (a later task) should pass "/create" here instead, so a
-  // stranger's tap on this button actually starts a new Vibecheck.
+  // ctaHref is passed for type-shape completeness, but ownerPreview=true
+  // means StoryViewer never renders the end-slide CTA at all — this is the
+  // owner's own preview, not the real public viewer.
   const slides = buildStorySlidesFromDraft(draft, "/create/preview");
   if (!slides) return null;
 
   const hasPhoto = !!draft.photoDataUrl;
+  const reservedPx = navHeight + actionRowHeight + STORY_WRAPPER_VERTICAL_PADDING + EXTRA_BREATHING_ROOM;
+  const cardHeight = `clamp(${CARD_MIN}px, calc(100dvh - ${reservedPx}px), ${CARD_MAX}px)`;
 
   return (
-    <div className="relative">
-      <StoryViewer context={draft.context} slides={slides} photoUrl={draft.photoDataUrl ?? undefined} />
+    <div className="flex flex-col items-center bg-[#0a0a0a]">
+      <StoryViewer
+        context={draft.context}
+        slides={slides}
+        photoUrl={draft.photoDataUrl ?? undefined}
+        ownerPreview
+        cardHeight={cardHeight}
+      />
 
-      {/* A bottom bar overlapped the viewer's own card (and, on most sizes,
-          its end-slide CTA button) — measured up to ~140px of overlap at
-          360x640/375x667/1222x900, since StoryViewer centers its card
-          vertically and, at some sizes, already nearly fills the viewport
-          on its own. A slim top bar instead sits in space the card's own
-          top padding already leaves clear at every tested size.
-          Single row, constant height, always — a second stacked row for
-          the "no photo" notice (tested first) pushed the bar 27px into the
-          card specifically at 1222x900 (the tightest case, ~136px of clear
-          space above the card there vs 181-234px elsewhere), so the notice
-          is folded into a compact icon button in the same row instead. */}
+      {/* Below the card, not overlaid on it — an earlier fixed-overlay
+          version covered the card's progress bars/counter (bottom bar) and
+          then the site navbar (top bar) before landing here. Sticky so it
+          stays reachable if the card ever comes out taller than expected,
+          same width as the card via the shared max-w-[320px]/sm:max-w-[400px]
+          pair StoryViewer itself uses. */}
       <div
-        className="pointer-events-none fixed inset-x-0 z-40 flex justify-center px-4 pt-2 pb-1.5"
-        style={{ top: navHeight }}
+        ref={actionRowRef}
+        className="sticky bottom-0 z-10 flex w-full justify-center bg-[#0a0a0a] px-6 pt-2 sm:px-4"
+        style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
       >
-        <div className="pointer-events-auto flex w-full max-w-[400px] gap-2">
+        <div className="flex w-full max-w-[320px] flex-col gap-2 sm:max-w-[400px]">
           {!hasPhoto && (
             <button
               type="button"
               onClick={() => router.push("/create/photo")}
-              title="No photo yet. Your Vibecheck looks better with one."
-              aria-label="Add a photo"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] border border-[#2A2726] bg-black/70 text-[15px] backdrop-blur-md hover:bg-black/85"
+              className="rounded-xl border border-[#2A2726] bg-[#171514] px-3 py-2 text-left text-[12px] text-[#FFB1D0] hover:bg-[#1F1B1A]"
             >
-              📷
+              No photo yet. Your Vibecheck looks better with one →
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => router.push("/create/summary")}
-            className="h-9 shrink-0 rounded-[12px] border border-[#2A2726] bg-black/70 px-4 text-[13px] font-extrabold text-white/80 backdrop-blur-md hover:bg-black/85"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push("/create/save")}
-            className="h-9 flex-1 rounded-[12px] bg-[#FF96C3] px-4 text-[13px] font-extrabold text-neutral-900 shadow-[0_6px_20px_rgba(255,150,195,0.35)]"
-          >
-            Save &amp; get my link
-          </button>
+          <div className="flex gap-2.5">
+            <button
+              type="button"
+              onClick={() => router.push("/create/summary")}
+              className="h-[46px] shrink-0 rounded-[14px] border border-[#2A2726] bg-[#171514] px-5 text-[14px] font-extrabold text-white/80 hover:bg-[#1F1B1A] sm:h-[50px]"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/create/save")}
+              className="h-[46px] flex-1 rounded-[14px] bg-[#FF96C3] px-5 text-[14px] font-extrabold text-neutral-900 shadow-[0_10px_30px_rgba(255,150,195,0.35)] sm:h-[50px]"
+            >
+              Save &amp; get my link
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -154,10 +154,22 @@ export function StoryViewer({
   context,
   slides,
   photoUrl,
+  ownerPreview = false,
+  cardHeight,
 }: {
   context: ProfileContext;
   slides: StorySlide[];
   photoUrl?: string;
+  // The owner viewing their own not-yet-published story: no React button
+  // (there's no one else to react), no "Create my own Vibecheck" CTA (it's
+  // already theirs), and the wrapper doesn't force min-h-[100dvh] so a
+  // caller can size the card itself instead. Defaults to false so every
+  // existing caller (the real public viewer, the Orla demo) is unaffected.
+  ownerPreview?: boolean;
+  // Overrides the card's height (a CSS length, e.g. "560px" or a clamp())
+  // — set via inline style, which wins over the height classes below
+  // regardless of whether cardHeight is given, so this is a pure add-on.
+  cardHeight?: string;
 }) {
   const [index, setIndex] = useState(0);
   const [direction, setDirection] = useState<1 | -1>(1);
@@ -206,9 +218,16 @@ export function StoryViewer({
     // itself IS the screen, matching Instagram/TikTok). From the sm:
     // breakpoint up, it becomes the floating rounded "phone mockup" card
     // look, since there's actual room around it on a real desktop screen.
-    <div className="flex min-h-[100dvh] items-center justify-center bg-[#0a0a0a] px-6 py-8 sm:px-4 sm:py-6">
+    <div
+      className={`flex items-center justify-center bg-[#0a0a0a] px-6 py-8 sm:px-4 sm:py-6${
+        ownerPreview ? "" : " min-h-[100dvh]"
+      }`}
+    >
       <div
-        style={{ background: slideBackground(context, index) }}
+        style={{
+          background: slideBackground(context, index),
+          ...(cardHeight ? { height: cardHeight } : {}),
+        }}
         onPointerDown={() => setPaused(true)}
         onPointerUp={() => setPaused(false)}
         onPointerLeave={() => setPaused(false)}
@@ -358,10 +377,10 @@ export function StoryViewer({
             style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
             className="flex items-center justify-between gap-2.5 px-3 sm:px-4 sm:pb-5"
           >
-            {slide.kind === "answer" && (
+            {slide.kind === "answer" && !ownerPreview && (
               <ReactButton reacted={reacted} onReact={handleReact} />
             )}
-            {slide.kind === "end" && (
+            {slide.kind === "end" && !ownerPreview && (
               <div className="pointer-events-auto relative w-full">
                 <Link
                   href={slide.ctaHref}
