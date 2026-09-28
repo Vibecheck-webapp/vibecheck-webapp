@@ -126,32 +126,3 @@ body {
     transform: rotate(0deg);
   }
 }
-
-/* Used by the builder's quick-reply chip row: a horizontally scrollable row
-   that scrolls but never shows a visible scrollbar track. */
-.no-scrollbar {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
-/* Builder-only: on a short viewport there's no room to spare for outer page
-   chrome around the chat card. Scoped to .builder-shell (only present on
-   /create/build) via :has() so this never touches any other route.
-   The navbar itself is NEVER hidden here — it stays visible and functional
-   at every size; it's only compacted (see next rule) when it's the thing
-   giving up space. */
-@media (max-height: 720px) {
-  .builder-shell {
-    padding: 0.5rem;
-  }
-  /* Compacts the navbar's own padding on this route only — logo and the
-     menu/credits controls stay visible, just with a shorter bar around
-     them (~52-56px instead of ~72px). */
-  body:has(.builder-shell) nav > div:first-child {
-    padding-top: 0.375rem;
-    padding-bottom: 0.375rem;
-  }
-}
