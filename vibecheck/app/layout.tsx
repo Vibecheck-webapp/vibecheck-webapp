@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { Navbar } from "@/components/nav/Navbar";
 import "./globals.css";
@@ -23,6 +23,16 @@ export const metadata: Metadata = {
   title: "VibeCheck — Know me without the talking.",
   description:
     "Have a fun conversation that builds your personal blueprint, then turn it into a bold, shareable Vibecheck Story.",
+};
+
+// resizes-content: on browsers that support it (mainly Chrome/Android), the
+// on-screen keyboard shrinks the layout viewport (and dvh with it) instead
+// of overlaying it — so a `h-dvh` box actually gets shorter as the keyboard
+// opens, rather than the keyboard covering the bottom of it. Browsers that
+// don't support this value ignore it; BuilderView's visualViewport listener
+// is the fallback for those.
+export const viewport: Viewport = {
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
