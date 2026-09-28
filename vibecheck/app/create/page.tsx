@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { ResumeDraftPrompt } from "@/components/builder/ResumeDraftPrompt";
+import { CreateNotice } from "@/components/create/CreateNotice";
 import { BetaFooter } from "@/components/ui/BetaFooter";
 import { Pill } from "@/components/ui/Pill";
 import type { ProfileContext } from "@/lib/supabase/types";
@@ -69,6 +71,9 @@ export default function CreatePage() {
   return (
     <section className="mx-auto w-full max-w-[1100px] px-6 py-12 lg:px-10 lg:py-16">
       <ResumeDraftPrompt />
+      <Suspense fallback={null}>
+        <CreateNotice />
+      </Suspense>
       <div className="flex flex-col items-start gap-3">
         <Link
           href="/"

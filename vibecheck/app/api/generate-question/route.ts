@@ -1,12 +1,7 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { MAX_BUILDER_TURNS } from "@/lib/builder-constants";
+import { getGroqClient, GROQ_MODEL } from "@/lib/groq";
 import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
-
-// process.env.GROQ_MODEL lets this be swapped without a code change;
-// "openai/gpt-oss-120b" is confirmed available on our Groq account
-// (llama-3.3-70b-versatile 404'd — account doesn't have that tier).
-const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 // ============ TESTING SCAFFOLD — remove once a real provider is funded ============
 // AI_MOCK_MODE=true in .env.local bypasses DeepSeek entirely so the builder
@@ -123,8 +118,10 @@ export async function POST(request: Request) {
   }
   // ============ end testing scaffold ============
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
+  let client: ReturnType<typeof getGroqClient>;
+  try {
+    client = getGroqClient();
+  } catch {
     return NextResponse.json(
       { error: "GROQ_API_KEY is not set. Add it to .env.local before the builder can ask questions." },
       { status: 500 },
@@ -148,14 +145,9 @@ or, once you have enough:
 
   const userPrompt = `Conversation so far:\n${buildTranscript(conversation)}`;
 
-  const client = new OpenAI({
-    baseURL: "https://api.groq.com/openai/v1",
-    apiKey,
-  });
-
   async function askOnce(extraInstruction?: string) {
     const completion = await client.chat.completions.create({
-      model: MODEL,
+      model: GROQ_MODEL,
       messages: [
         {
           role: "system",

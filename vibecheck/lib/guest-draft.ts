@@ -9,6 +9,37 @@ export interface DraftTurn {
   quickReplies?: string[];
 }
 
+// One slide of the eventual StoryViewer story. `answer` is what actually
+// renders and may be user-edited on the summary review screen;
+// `originalAnswer` is the user's raw, unedited answer, kept so "Use my
+// original words" can always restore it. `source_index` is this slide's
+// index in the GuestDraft.conversation it came from — a later step maps
+// slides -> StorySlide[] (for StoryViewer) and, on real submission, to
+// profiles.prompts.
+export interface DraftSlide {
+  question: string;
+  answer: string;
+  originalAnswer: string;
+  source_index: number;
+}
+
+// The AI-generated (and then user-reviewed/edited) story built from a
+// finished conversation. `sourceConversation` is a snapshot of
+// GuestDraft.conversation at generation time, kept only so the summary page
+// can tell whether the conversation has since changed and the "regenerate"
+// prompt is warranted, rather than silently re-calling the API on every
+// refresh.
+export interface DraftSummary {
+  name: string | null;
+  headline: string;
+  bio: string;
+  vibe_tags: string[];
+  interests: string[];
+  slides: DraftSlide[];
+  sourceConversation: DraftTurn[];
+  generatedAt: string;
+}
+
 // Shaped to map cleanly onto a future `profiles` insert: `context` is used
 // directly, and `conversation` is the raw material for headline/bio/
 // vibe_tags/interests — that extraction is a deliberately separate
@@ -20,6 +51,12 @@ export interface DraftTurn {
 // the database as a data URL. It's also never actually stored alongside
 // the rest of this object; see the STORAGE_KEY / PHOTO_STORAGE_KEY split
 // below.
+//
+// summary: null until /create/summary generates it. Once real accounts
+// exist, this is where a later step reads the reviewed/edited name,
+// headline, bio, tags, interests, and slides from — the flat
+// headline/bio/vibe_tags/interests fields below predate this and are
+// currently unused placeholders from before the summarization step existed.
 export interface GuestDraft {
   version: 1;
   context: ProfileContext;
@@ -31,6 +68,7 @@ export interface GuestDraft {
   vibe_tags: string[];
   interests: string[];
   photoDataUrl: string | null;
+  summary: DraftSummary | null;
 }
 
 const STORAGE_KEY = "vibecheck:guest-draft:v1";
@@ -52,6 +90,7 @@ export function createDraft(context: ProfileContext): GuestDraft {
     vibe_tags: [],
     interests: [],
     photoDataUrl: null,
+    summary: null,
   };
 }
 
