@@ -69,6 +69,13 @@ export interface GuestDraft {
   interests: string[];
   photoDataUrl: string | null;
   summary: DraftSummary | null;
+  // Friendship/get_to_know only: the model's own running snapshot of what
+  // it's already extracted from the conversation (short labels like
+  // "personality: introvert"), echoed back to it on every generate-question
+  // call so it can decide what's still missing without re-deriving that
+  // from scratch by re-reading the whole transcript each time. Always []
+  // for dating, which doesn't use this mechanism.
+  extractedAttributes: string[];
 }
 
 const STORAGE_KEY = "vibecheck:guest-draft:v1";
@@ -91,6 +98,7 @@ export function createDraft(context: ProfileContext): GuestDraft {
     interests: [],
     photoDataUrl: null,
     summary: null,
+    extractedAttributes: [],
   };
 }
 
@@ -107,7 +115,8 @@ export function loadDraft(): GuestDraft | null {
     } catch {
       // Ignore — photo just comes back empty.
     }
-    return { ...parsed, photoDataUrl };
+    // A draft saved before extractedAttributes existed simply won't have it.
+    return { ...parsed, extractedAttributes: parsed.extractedAttributes ?? [], photoDataUrl };
   } catch {
     return null;
   }

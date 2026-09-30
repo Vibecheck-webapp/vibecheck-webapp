@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { MAX_BUILDER_TURNS } from "@/lib/builder-constants";
+import { IDENTITY_FIELDS, MAX_BUILDER_TURNS } from "@/lib/builder-constants";
 import { getGroqClient, GROQ_MODEL } from "@/lib/groq";
 import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
 
@@ -7,7 +7,10 @@ import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
 // AI_MOCK_MODE=true in .env.local bypasses DeepSeek entirely so the builder
 // flow can be exercised end to end without a funded API key. Delete this
 // block and the MOCK_MODE branch below to remove it; the real
-// implementation beneath is untouched either way.
+// implementation beneath is untouched either way. Mock mode only ever
+// returns plain questions — it never simulates enhance/recap/identity
+// chips, since it exists to exercise the basic Q&A loop without a key, not
+// to test those features.
 const MOCK_MODE = process.env.AI_MOCK_MODE === "true";
 
 const MOCK_QUESTIONS: Record<ProfileContext, string[]> = {
@@ -22,24 +25,23 @@ const MOCK_QUESTIONS: Record<ProfileContext, string[]> = {
     "What's one thing you're looking for that you won't compromise on?",
   ],
   friendship: [
-    "First things first — what should I call you?",
-    "What's something people are always surprised to learn about you?",
-    "How do you usually make new friends?",
-    "What's your go-to hangout activity?",
-    "Are you the planner of the friend group, or the one who just shows up?",
-    "What's a hobby or interest you could talk about for hours?",
-    "What kind of humor do you vibe with most?",
-    "How would your closest friend describe you in three words?",
+    "Tell me a little about you — what should your friends know about you?",
+    "What's a really good day look like for you?",
+    "What could you talk about for hours without getting bored?",
+    "What kind of people do you naturally click with?",
+    "Be honest — what kind of friend are you?",
+    "What's something you're currently obsessed with?",
+    "What's one thing you really value in a friendship?",
+    "What's something about you people probably wouldn't guess?",
   ],
   get_to_know: [
-    "First things first — what should I call you?",
-    "What's something people are always surprised to learn about you?",
-    "What's a hobby or interest you could talk about for hours?",
-    "Are you more of an introvert or extrovert, or somewhere in between?",
-    "What's something you're really passionate about right now?",
-    "How would your closest friend describe you in three words?",
-    "What does a perfect day look like for you?",
-    "What's something you're proud of that isn't on a resume?",
+    "Okay, give me the unfiltered version of you — what you're like, what you're into, what you love, what annoys you, what you do for fun.",
+    "What's something you could happily spend an entire day doing?",
+    "What's something you're currently obsessed with?",
+    "What kind of people do you usually get along with?",
+    "What's something very \"you\"?",
+    "What's your entertainment personality?",
+    "What's something people wouldn't guess about you?",
   ],
 };
 
@@ -66,6 +68,12 @@ interface RequestTurn {
 interface RequestBody {
   context: ProfileContext;
   conversation: RequestTurn[];
+  // Friendship/get_to_know only — see guest-draft.ts's GuestDraft.extractedAttributes.
+  extractedAttributes?: string[];
+  // Set by the client right after the user picks or skips an enhancement
+  // offer, so the immediate follow-up call doesn't just offer it again for
+  // the same (now-resolved) answer.
+  skipEnhancement?: boolean;
 }
 
 function buildTranscript(conversation: RequestTurn[]): string {
@@ -83,6 +91,136 @@ function buildTranscript(conversation: RequestTurn[]): string {
     .join("\n");
 }
 
+// ============ DATING — unchanged from before this task ============
+// Dating keeps its own separate prompt/behavior exactly as it was: no
+// enhancement offers, no in-chat recap, no identity-chip batch. Those are
+// friendship/get_to_know-only additions (see their specs).
+function buildDatingSystemPrompt(): string {
+  return `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
+Persona for this conversation: ${CONTEXT_PERSONA.dating}
+
+Ask ONE next question that fits naturally after what's already been asked — don't repeat a topic already covered by an answered or declined question, but you may gently re-approach a "skipped for now" topic later if it fits.
+If you now have enough answers (roughly 8-12 exchanges, or clearly enough to build a good profile), set "done" to true instead of asking another question.
+If a short set of quick-reply choices would help (e.g. an age range, a yes/no, a short list of options), include 2-6 short options in "quickReplies" — otherwise omit it.
+Keep the question short, conversational, and in character. Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
+
+Respond with ONLY a json object, no other text, matching this exact shape:
+{"done": false, "question": "your next question here", "quickReplies": ["optional", "short", "options"]}
+or, once you have enough:
+{"done": true}`;
+}
+
+function buildDatingUserPrompt(conversation: RequestTurn[]): string {
+  return `Conversation so far:\n${buildTranscript(conversation)}`;
+}
+
+// ============ FRIENDSHIP ============
+function buildFriendshipSystemPrompt(): string {
+  return `You are Vibecheck, an AI interviewer helping someone build a shareable Friendship Vibecheck.
+Persona for this conversation: ${CONTEXT_PERSONA.friendship}
+
+PURPOSE
+The Friendship Vibecheck should help someone quickly understand: what the user is like as a friend, what they enjoy doing, what kind of people they connect with, how they behave socially, what makes them fun/interesting/unique, and what they value in friendships. It should feel like talking to a friend getting to know them, never like completing a questionnaire.
+
+TARGET: roughly 8-12 exchanges, ~3-5 minutes. Never work through a fixed list of questions in order — treat the following as beats to draw from, since most real answers naturally cover several at once:
+- The basics: their name, and informationally their age and pronouns.
+- Their everyday vibe: what a really good day looks like for them (weekend habits, social preference, going out vs staying in, food, entertainment, spontaneity).
+- What they could talk about for hours without getting bored (hobbies, interests, obsessions, passions, communities).
+- Their kind of people: who they naturally click with (humour, personality compatibility, social energy, values, what makes them instantly think "we're going to be friends").
+- How they are as a friend: their friend "archetype", and their instinct when a friend is having a bad day.
+- Likes, dislikes, and the little things: something they're currently obsessed with, their entertainment history/personality.
+- Friendship values: what they value most in a friendship (loyalty, honesty, communication, humour, consistency, emotional support).
+- One wildcard, near the end: something about them people wouldn't guess, an irrational fear, a weirdest habit, or a useless talent.
+
+CRITICAL — extract, don't interrogate, and never repeat a failed beat: a single free-text answer often reveals several of the beats above at once. The running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds two kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), and beats you already tried where the user gave a vague, evasive, or non-answer, marked "tried: <beat>" (e.g. "tried: hobbies/interests"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. If the answer you just received is itself vague/evasive/a non-answer, add a "tried: <beat>" entry for it to "extracted" before moving on. Do not simply work down the beat list in order.
+
+BASE INFO: ask their name, and informationally their age and pronouns, conversationally and early — phrase it as a natural opening question (e.g. "Tell me a little about you — what should your friends know about you?"), never as a rigid scripted form question. If the conversation is empty (this is your very first question), it must be this kind of open, personality-inviting opener. If the user already stated their name, age, or pronouns naturally in an earlier answer, never ask again — the skip controls already let them decline anything you do ask, so don't press if they skip.
+
+QUICK REPLIES: when a short set of tappable choices would genuinely help, write 2-6 short ones yourself, tailored to the actual question you're asking. These examples show the STYLE expected in this context, not a fixed menu to reuse verbatim:
+- An opening self-description question: "I'm pretty chill" / "I'm very social" / "I'm an introvert" / "I'm always doing something"
+- Plan-everything vs spontaneous: "Plan everything" / "Very spontaneous" / "A bit of both" / "Depends on the day"
+- Friend archetype: "The planner" / "The therapist" / "The chaotic one" / "The hype person" / "The listener" / "The 'I'm outside' friend" / "The disappears-and-comes-back friend"
+- What makes an instant friend: "Good humour" / "Same energy" / "Easy conversation" / "Kindness" / "Shared interests" / "Being genuine" / "Randomness"
+- Instinct when a friend is having a bad day: "Listen" / "Give advice" / "Make them laugh" / "Show up" / "Give them space" / "Feed them"
+- Friendship values: "Loyalty" / "Good communication" / "Being able to laugh together" / "Showing up" / "Honesty" / "Giving each other space"
+
+ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the rule below instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
+
+WHEN DONE: once you have enough for a great profile (roughly 8-12 exchanges, or clearly enough sooner — including because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true and include "recap" — ONE short, warm, conversational message reflecting back what you learned, in roughly this shape: "You're [personality], you're into [interests], and you seem to click with people who [friendship preference]. And apparently you're also [a fun/random detail]." Build it STRICTLY from what they actually told you — never invent or embellish. Never state or imply a sensitive attribute (health, religion, sexual orientation, ethnicity, finances) unless they explicitly said it themselves.
+
+Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
+
+Respond with ONLY a json object, no other text, matching exactly one of these shapes:
+{"done": false, "question": "your next question", "quickReplies": ["optional", "short", "options"], "extracted": ["short label", "short label"]}
+{"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
+{"done": true, "recap": "your recap message", "extracted": ["short label"]}
+
+"extracted" must be present on every response: your updated running list of short entries — both captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, cycling") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
+}
+
+// ============ GET TO KNOW ============
+const IDENTITY_FIELD_KEYS = IDENTITY_FIELDS.map((f) => f.key);
+
+function buildGetToKnowSystemPrompt(): string {
+  return `You are Vibecheck, an AI interviewer helping someone build a shareable "Just Getting to Know Me" Vibecheck — the broadest, most personality-led format. It isn't specifically about friendship or dating; it's essentially "here's me, get to know me," suitable for anyone (classmates, colleagues, new friends, communities, events). It should feel less like answering questions and more like telling someone your story.
+Persona for this conversation: ${CONTEXT_PERSONA.get_to_know}
+
+TARGET: roughly 7-10 exchanges, ~3-4 minutes.
+
+OPENING — MOST IMPORTANT RULE: if the conversation is empty (this is your very first question), you MUST open with one large, open "unfiltered version of you" brain-dump invitation — NOT a narrow question. Something like: "Okay, give me the unfiltered version of you. Tell me anything — what you're like, what you're into, what you love, what annoys you, what you do for fun… whatever comes to mind." Expect one big free-text answer back, and extract as much as you can from it (personality, interests, hobbies, social style, likes/dislikes, lifestyle, entertainment, values, quirks, conversation topics) rather than asking a series of narrow follow-ups.
+
+AFTER THE OPENING — fill only the gaps, and never repeat a failed beat: the running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds two kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), and beats you already tried where the user gave a vague, evasive, or non-answer, marked "tried: <beat>" (e.g. "tried: entertainment personality"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. If the answer you just received is itself vague/evasive/a non-answer, add a "tried: <beat>" entry for it to "extracted" before moving on. Treat the following as beats to draw from, not a script:
+- Their kind of fun: something they could happily spend an entire day doing (hobbies, interests, entertainment, lifestyle).
+- The things they love: something they're currently obsessed with, and optionally one thing they never get tired of.
+- Their people & their energy: what kind of people they get along with, and their own social energy.
+- The little things: something very "them" — a small, specific, shareable personality detail.
+- Entertainment & favourites: their entertainment personality (movies/music/gaming/books/social video), and optionally one favourite they'd recommend to anyone.
+- One wildcard, near the end: something people wouldn't guess about them, their weirdest habit, or a useless talent.
+
+BASE INFO: ask their name conversationally if it hasn't come up yet — it very often appears naturally in the opening brain-dump, in which case never ask again.
+
+QUICK REPLIES: when a short set of tappable choices would genuinely help, write 2-6 short ones yourself, tailored to the actual question you're asking. These examples show the STYLE expected in this context, not a fixed menu to reuse verbatim:
+- Filling a social-preference gap: "Let's go out" / "Stay in" / "Depends" / "I'm somewhere in the middle"
+- Kind of fun: "Going somewhere" / "Gaming" / "Watching stuff" / "Creating something" / "Being with people" / "Trying something new" / "Doing absolutely nothing"
+- Social energy: "Very social" / "Selective" / "Quiet until I'm comfortable" / "Depends on the people" / "Chaotic"
+- Entertainment personality: "Movie person" / "Music person" / "Gaming person" / "Books" / "YouTube/TikTok rabbit holes" / "A bit of everything"
+
+ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the rule below instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
+
+WHEN DONE: once you have enough for a great profile (roughly 7-10 exchanges, or clearly enough sooner — including because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true and include:
+- "recap": ONE short, warm, conversational message reflecting back what you learned, in roughly this shape: "You're [personality], you're into [interests], and your kind of fun is [activity/style]. You seem like someone who [interesting observation]. And the most unexpectedly-you thing I learned? [quirk]." Build it STRICTLY from what they actually told you — never invent or embellish. Never state or imply a sensitive attribute (health, religion, sexual orientation, ethnicity, finances) unless they explicitly said it themselves.
+- "knownIdentityFields": which of these keys the user has ALREADY explicitly, unambiguously stated somewhere in the conversation — do not guess or infer from vibes: ${IDENTITY_FIELD_KEYS.map((k) => `"${k}"`).join(", ")}. Anything not in this list will be separately offered to them afterward as optional add/skip chips, so don't ask about these yourself.
+
+Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
+
+Respond with ONLY a json object, no other text, matching exactly one of these shapes:
+{"done": false, "question": "your next question", "quickReplies": ["optional", "short", "options"], "extracted": ["short label", "short label"]}
+{"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
+{"done": true, "recap": "your recap message", "knownIdentityFields": ["age"], "extracted": ["short label"]}
+
+"extracted" must be present on every response: your updated running list of short entries — both captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, F1") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
+}
+
+function buildAdaptiveUserPrompt(
+  conversation: RequestTurn[],
+  extractedAttributes: string[],
+  skipEnhancement: boolean,
+): string {
+  const extractedLine = extractedAttributes.length
+    ? extractedAttributes.join("; ")
+    : "(nothing extracted yet)";
+  const lines = [
+    `Already extracted so far: ${extractedLine}`,
+    `Conversation so far:\n${buildTranscript(conversation)}`,
+  ];
+  if (skipEnhancement) {
+    lines.push(
+      "skipEnhancement: true — the user just resolved an enhancement offer for their most recent answer. Do not offer it again; decide the next question (or done) normally.",
+    );
+  }
+  return lines.join("\n\n");
+}
+
 export async function POST(request: Request) {
   let body: RequestBody;
   try {
@@ -92,6 +230,8 @@ export async function POST(request: Request) {
   }
 
   const { context, conversation } = body;
+  const extractedAttributes = Array.isArray(body.extractedAttributes) ? body.extractedAttributes : [];
+  const skipEnhancement = Boolean(body.skipEnhancement);
 
   if (!isProfileContext(context)) {
     return NextResponse.json({ error: `Unknown context: ${context}` }, { status: 400 });
@@ -128,22 +268,15 @@ export async function POST(request: Request) {
     );
   }
 
-  // Groq's JSON object mode requires the response shape to be spelled out
-  // explicitly in the prompt — there's no separate schema param for it.
-  const systemPrompt = `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
-Persona for this conversation: ${CONTEXT_PERSONA[context]}
-
-Ask ONE next question that fits naturally after what's already been asked — don't repeat a topic already covered by an answered or declined question, but you may gently re-approach a "skipped for now" topic later if it fits.
-If you now have enough answers (roughly 8-12 exchanges, or clearly enough to build a good profile), set "done" to true instead of asking another question.
-If a short set of quick-reply choices would help (e.g. an age range, a yes/no, a short list of options), include 2-6 short options in "quickReplies" — otherwise omit it.
-Keep the question short, conversational, and in character. Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
-
-Respond with ONLY a json object, no other text, matching this exact shape:
-{"done": false, "question": "your next question here", "quickReplies": ["optional", "short", "options"]}
-or, once you have enough:
-{"done": true}`;
-
-  const userPrompt = `Conversation so far:\n${buildTranscript(conversation)}`;
+  const isAdaptive = context === "friendship" || context === "get_to_know";
+  const systemPrompt = context === "dating"
+    ? buildDatingSystemPrompt()
+    : context === "friendship"
+      ? buildFriendshipSystemPrompt()
+      : buildGetToKnowSystemPrompt();
+  const userPrompt = isAdaptive
+    ? buildAdaptiveUserPrompt(conversation, extractedAttributes, skipEnhancement)
+    : buildDatingUserPrompt(conversation);
 
   async function askOnce(extraInstruction?: string) {
     const completion = await client.chat.completions.create({
@@ -160,9 +293,16 @@ or, once you have enough:
       top_p: 1,
       // Generous headroom: reasoning_effort spends part of this budget on
       // hidden reasoning tokens before the visible JSON is emitted, so a
-      // tight cap here truncates the JSON output mid-object.
-      max_completion_tokens: 600,
-      reasoning_effort: "medium",
+      // tight cap here truncates the JSON output mid-object. The adaptive
+      // contexts' much longer, more instruction-dense system prompts (the
+      // "tried:"-tracking rule especially) measurably drove up hidden
+      // reasoning-token usage in testing — occasionally enough to blow even
+      // a 900-token budget at "medium" effort and come back as Groq's
+      // json_validate_failed rather than a parseable object. Lower effort
+      // plus more headroom fixed it in testing; dating's prompt is much
+      // shorter and never showed this, so it's untouched.
+      max_completion_tokens: isAdaptive ? 1400 : 600,
+      reasoning_effort: isAdaptive ? "low" : "medium",
     });
 
     const raw = completion.choices[0]?.message?.content?.trim() || "{}";
@@ -176,10 +316,42 @@ or, once you have enough:
     } catch {
       parsed = await askOnce("Keep your response concise and ensure the JSON is complete and valid.");
     }
+
+    const done = Boolean(parsed.done);
+    const question = typeof parsed.question === "string" ? parsed.question : undefined;
+    const quickReplies = Array.isArray(parsed.quickReplies) ? parsed.quickReplies.slice(0, 6) : undefined;
+
+    // Dating's response shape is byte-identical to before this task — the
+    // extra adaptive fields below are never even read for it, but keeping
+    // them out of the payload entirely is the stronger guarantee.
+    if (!isAdaptive) {
+      return NextResponse.json({ done, question, quickReplies });
+    }
+
+    const extracted = Array.isArray(parsed.extracted)
+      ? parsed.extracted.filter((s: unknown): s is string => typeof s === "string").slice(0, 30)
+      : extractedAttributes;
+
+    const enhanceOptions =
+      parsed.enhance && Array.isArray(parsed.enhance.options)
+        ? parsed.enhance.options.filter((s: unknown): s is string => typeof s === "string").slice(0, 3)
+        : undefined;
+
+    const recap = typeof parsed.recap === "string" && parsed.recap.trim() ? parsed.recap.trim() : undefined;
+
+    const knownIdentityFields =
+      context === "get_to_know" && Array.isArray(parsed.knownIdentityFields)
+        ? parsed.knownIdentityFields.filter((k: unknown): k is string => IDENTITY_FIELD_KEYS.includes(k as string))
+        : undefined;
+
     return NextResponse.json({
-      done: Boolean(parsed.done),
-      question: typeof parsed.question === "string" ? parsed.question : undefined,
-      quickReplies: Array.isArray(parsed.quickReplies) ? parsed.quickReplies.slice(0, 6) : undefined,
+      done,
+      question: enhanceOptions ? undefined : question,
+      quickReplies: enhanceOptions ? undefined : quickReplies,
+      enhance: enhanceOptions && enhanceOptions.length > 0 ? { options: enhanceOptions } : undefined,
+      recap: done ? recap : undefined,
+      knownIdentityFields: done ? knownIdentityFields : undefined,
+      extracted,
     });
   } catch (err) {
     console.error("generate-question failed", err);
