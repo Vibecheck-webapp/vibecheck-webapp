@@ -10,7 +10,7 @@ export function PhotoFrame({ photoUrl, name }: { photoUrl?: string; name: string
           <img
             src={photoUrl}
             alt={name}
-            className="block h-full w-full rounded-[12px] object-cover sm:rounded-[14px]"
+            className="block h-full w-full rounded-[12px] object-contain sm:rounded-[14px]"
           />
         ) : (
           <div className="h-full w-full rounded-[12px] bg-white/10 sm:rounded-[14px]" />
