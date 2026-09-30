@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { PhotoFrame } from "@/components/viewer/PhotoFrame";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FRAME_ASPECT_RATIO, PhotoFrame } from "@/components/viewer/PhotoFrame";
 import type { StorySlide } from "@/lib/story-slides";
 import type { ProfileContext } from "@/lib/supabase/types";
 
@@ -180,6 +180,68 @@ export function StoryViewer({
   const profileName =
     slides.find((s) => s.kind === "intro" || s.kind === "end")?.name ?? "";
 
+  // PhotoFrame sizes itself purely from the card's width (a %, clamped by
+  // min/max-w), with height following via its own aspect-ratio — it has no
+  // idea how much vertical room is actually left once the eyebrow label,
+  // name and caption have taken their share. That's fine on an
+  // unconstrained card (plenty of height to spare), but a caller that
+  // passes `cardHeight` can shrink the card enough that the frame's
+  // width-driven height pushes the caption (and the frame's own smiley)
+  // past the card's bottom edge, where overflow-hidden clips them.
+  //
+  // Fixed by measuring the actual overflow after layout and, only then,
+  // capping the frame's width (its height follows via the same
+  // aspect-ratio) by just enough to remove it — imperative DOM writes via
+  // refs rather than React state, so there's no extra render pass and,
+  // critically, no code path here that can ever run when `cardHeight` is
+  // undefined. That keeps every existing caller (the real public viewer,
+  // Orla's /preview demo) byte-for-byte unaffected.
+  const introContentRef = useRef<HTMLDivElement>(null);
+  const photoFrameRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!cardHeight) return;
+    const contentEl = introContentRef.current;
+    const frameEl = photoFrameRef.current;
+    if (!contentEl || !frameEl) return;
+
+    function measureAndApply() {
+      if (!frameEl || !contentEl) return;
+      // Clear any previous cap first so this always measures the natural,
+      // width-driven size — otherwise a resize from short to tall would
+      // never be able to grow the frame back.
+      frameEl.style.width = "";
+      frameEl.style.maxWidth = "";
+      // A handful of passes rather than one: shrinking the frame by exactly
+      // the measured overflow assumes nothing else reflows in response,
+      // which is usually true but not guaranteed (sub-pixel rounding, a
+      // font swap mid-measurement). Each pass re-measures from scratch, so
+      // this converges rather than trusting a single estimate.
+      for (let i = 0; i < 4; i++) {
+        const overflowPx = contentEl.scrollHeight - contentEl.clientHeight;
+        if (overflowPx <= 0) break;
+        const naturalHeight = frameEl.getBoundingClientRect().height;
+        const cappedHeight = Math.max(120, naturalHeight - overflowPx - 6);
+        if (cappedHeight >= naturalHeight) break;
+        // width/height = FRAME_ASPECT_RATIO (1/1.05), so width = height *
+        // FRAME_ASPECT_RATIO — dividing here would inflate instead of shrink.
+        const cappedWidth = cappedHeight * FRAME_ASPECT_RATIO;
+        frameEl.style.width = `${cappedWidth}px`;
+        frameEl.style.maxWidth = `${cappedWidth}px`;
+      }
+    }
+
+    measureAndApply();
+    // Webfonts (Fredoka etc.) can finish loading after this first pass and
+    // reflow the eyebrow/name/caption text taller, without changing
+    // contentEl's own (flex-computed) box size — so the ResizeObserver
+    // below wouldn't catch that on its own.
+    document.fonts?.ready?.then(measureAndApply).catch(() => {});
+    const ro = new ResizeObserver(measureAndApply);
+    ro.observe(contentEl);
+    return () => ro.disconnect();
+  }, [cardHeight, index]);
+
   function next() {
     if (index >= total - 1) return;
     setDirection(1);
@@ -291,12 +353,13 @@ export function StoryViewer({
 
           <div
             key={index}
+            ref={introContentRef}
             style={{
               animation: `${
                 direction === 1 ? "slide-in-right" : "slide-in-left"
               } 320ms cubic-bezier(0.22,1,0.36,1)`,
             }}
-            className="flex flex-1 flex-col items-center justify-center px-5 py-3 text-center sm:px-7 sm:py-4"
+            className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 py-3 text-center sm:px-7 sm:py-4"
           >
             {slide.kind === "intro" && (
               <>
@@ -313,7 +376,7 @@ export function StoryViewer({
                   }}
                   className="mt-2 text-white sm:mt-3"
                 />
-                <PhotoFrame photoUrl={photoUrl} name={profileName} />
+                <PhotoFrame ref={photoFrameRef} photoUrl={photoUrl} name={profileName} />
                 <div
                   style={{ fontFamily: BODY_FONT }}
                   className="px-2 text-[12px] text-white/70 sm:text-[13px]"
