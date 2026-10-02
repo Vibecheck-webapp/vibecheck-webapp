@@ -69,12 +69,13 @@ export interface GuestDraft {
   interests: string[];
   photoDataUrl: string | null;
   summary: DraftSummary | null;
-  // Friendship/get_to_know only: the model's own running snapshot of what
-  // it's already extracted from the conversation (short labels like
-  // "personality: introvert"), echoed back to it on every generate-question
-  // call so it can decide what's still missing without re-deriving that
-  // from scratch by re-reading the whole transcript each time. Always []
-  // for dating, which doesn't use this mechanism.
+  // The model's own running snapshot of what it's already extracted from the
+  // conversation, echoed back to it on every generate-question call so it
+  // can decide what's still missing without re-reading the whole transcript.
+  // All three contexts keep their "slide: …" entries here (the shared
+  // content-based stopping rule, see builder-constants); friendship and
+  // get_to_know also keep attribute labels like "personality: introvert"
+  // and "tried: <beat>" entries.
   extractedAttributes: string[];
 }
 

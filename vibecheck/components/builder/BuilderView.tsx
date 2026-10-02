@@ -4,9 +4,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  countSlideMaterial,
   IDENTITY_FIELDS,
   MAX_BUILDER_TURNS,
+  POST_CAP_TURN_ALLOWANCE,
   SCRIPTED_OPENING_QUESTIONS,
+  SLIDE_MATERIAL_TARGET,
   UNDER_18_AGE_REPLIES,
 } from "@/lib/builder-constants";
 import {
@@ -91,7 +94,11 @@ export function BuilderView() {
   }, []);
 
   const fetchNextQuestion = useCallback(async (current: GuestDraft, opts?: { skipEnhancement?: boolean }) => {
-    if (current.conversation.length >= MAX_BUILDER_TURNS) {
+    // Mirrors the route's backstop: dating just ends at the cap; the other
+    // two still make one forced-"done" call there to get their recap.
+    const turnLimit =
+      current.context === "dating" ? MAX_BUILDER_TURNS : MAX_BUILDER_TURNS + POST_CAP_TURN_ALLOWANCE;
+    if (current.conversation.length >= turnLimit) {
       setIsDone(true);
       return;
     }
@@ -383,7 +390,18 @@ export function BuilderView() {
 
   if (!draft) return null;
 
-  const progress = Math.min(draft.conversation.length / MAX_BUILDER_TURNS, 1) * 100;
+  // Fills by story material gathered (the same "slide:" count the model
+  // stops on), not by a countdown to a question number nobody reaches —
+  // with turns-used as a floor so it still moves on thin answers.
+  const progress = isDone
+    ? 100
+    : Math.min(
+        Math.max(
+          countSlideMaterial(draft.extractedAttributes) / SLIDE_MATERIAL_TARGET,
+          draft.conversation.length / MAX_BUILDER_TURNS,
+        ),
+        0.95,
+      ) * 100;
 
   return (
     <section className="mx-auto w-full max-w-[820px] px-6 py-10 lg:py-14">
@@ -412,8 +430,7 @@ export function BuilderView() {
               Building your {CONTEXT_LABEL[draft.context]} Vibecheck
             </div>
             <div className="mt-1 text-[12px] text-[#FFB1D0]">
-              Question {Math.min(draft.conversation.length + 1, MAX_BUILDER_TURNS)} of up to{" "}
-              {MAX_BUILDER_TURNS}
+              {isDone ? "All done" : "We'll wrap up once we've got your vibe"}
             </div>
           </div>
           <span className="rounded-full border border-[#2A2726] px-3 py-1.5 text-[12px] font-extrabold text-white/80">
