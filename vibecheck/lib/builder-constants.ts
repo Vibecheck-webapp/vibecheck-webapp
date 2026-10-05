@@ -5,11 +5,11 @@
 // never get rich enough to trigger that. Counts dating's 2 scripted turns.
 export const MAX_BUILDER_TURNS = 9;
 
-// Friendship/get_to_know only: turns allowed past MAX_BUILDER_TURNS for what
-// happens after the model is done — get_to_know's optional identity chips
-// (each committed as a turn) and the recap's "Add something" — so hitting
-// the cap still ends in a recap instead of cutting the flow off. The route
-// stops calling the AI entirely beyond this.
+// Friendship/get_to_know only: turns allowed past MAX_BUILDER_TURNS for
+// get_to_know's optional identity chips (each committed as a turn, but
+// resolved client-side without another AI call) — so hitting the cap still
+// lets that batch finish instead of cutting it off mid-way. The route stops
+// calling the AI entirely beyond this.
 export const POST_CAP_TURN_ALLOWANCE = 9;
 
 // The shared, content-based stopping rule for all three contexts: the model

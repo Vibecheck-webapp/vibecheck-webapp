@@ -28,7 +28,7 @@ const JSON_RETRY_DELAY_MS = 500;
 // flow can be exercised end to end without a funded API key. Delete this
 // block and the MOCK_MODE branch below to remove it; the real
 // implementation beneath is untouched either way. Mock mode only ever
-// returns plain questions — it never simulates enhance/recap/identity
+// returns plain questions — it never simulates enhance offers or identity
 // chips, since it exists to exercise the basic Q&A loop without a key, not
 // to test those features.
 const MOCK_MODE = process.env.AI_MOCK_MODE === "true";
@@ -154,9 +154,9 @@ function mergeExtracted(previous: string[], next: string[]): string[] {
 
 // ============ DATING ============
 // Dating keeps its own separate prompt/behavior: no enhancement offers, no
-// in-chat recap, no identity-chip batch (friendship/get_to_know-only
-// additions, see their specs). It shares only SLIDE_RULE, which is why it
-// now returns "extracted" too — just its "slide:" entries.
+// identity-chip batch (friendship/get_to_know-only additions, see their
+// specs). It shares only SLIDE_RULE, which is why it now returns
+// "extracted" too — just its "slide:" entries.
 function buildDatingSystemPrompt(): string {
   return `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
 Persona for this conversation: ${CONTEXT_PERSONA.dating}
@@ -219,14 +219,14 @@ ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revea
 
 ${SLIDE_RULE}
 
-WHEN DONE: once the stopping rule says you have enough (or sooner, because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true and include "recap" — ONE short, warm, conversational message reflecting back what you learned, in roughly this shape: "You're [personality], you're into [interests], and you seem to click with people who [friendship preference]. And apparently you're also [a fun/random detail]." Build it STRICTLY from what they actually told you — never invent or embellish. Never state or imply a sensitive attribute (health, religion, sexual orientation, ethnicity, finances) unless they explicitly said it themselves.
+WHEN DONE: once the stopping rule says you have enough (or sooner, because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true. The user reviews and edits everything on a dedicated screen right after this conversation — don't summarize or recap what you learned here, that's handled elsewhere.
 
 Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
 
 Respond with ONLY a json object, no other text, matching exactly one of these shapes:
 {"done": false, "question": "your next question", "quickReplies": ["optional", "short", "options"], "extracted": ["short label", "short label"]}
 {"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
-{"done": true, "recap": "your recap message", "extracted": ["short label"]}
+{"done": true, "extracted": ["short label"]}
 
 "extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, cycling") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
 }
@@ -262,16 +262,14 @@ ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revea
 
 ${SLIDE_RULE}
 
-WHEN DONE: once the stopping rule says you have enough (or sooner, because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true and include:
-- "recap": ONE short, warm, conversational message reflecting back what you learned, in roughly this shape: "You're [personality], you're into [interests], and your kind of fun is [activity/style]. You seem like someone who [interesting observation]. And the most unexpectedly-you thing I learned? [quirk]." Build it STRICTLY from what they actually told you — never invent or embellish. Never state or imply a sensitive attribute (health, religion, sexual orientation, ethnicity, finances) unless they explicitly said it themselves.
-- "knownIdentityFields": which of these keys the user has ALREADY explicitly, unambiguously stated somewhere in the conversation — do not guess or infer from vibes: ${IDENTITY_FIELD_KEYS.map((k) => `"${k}"`).join(", ")}. Anything not in this list will be separately offered to them afterward as optional add/skip chips, so don't ask about these yourself.
+WHEN DONE: once the stopping rule says you have enough (or sooner, because several beats are now closed as "tried" and there isn't much left to ask), set "done" to true and include "knownIdentityFields": which of these keys the user has ALREADY explicitly, unambiguously stated somewhere in the conversation — do not guess or infer from vibes: ${IDENTITY_FIELD_KEYS.map((k) => `"${k}"`).join(", ")}. Anything not in this list will be separately offered to them afterward as optional add/skip chips, so don't ask about these yourself. The user reviews and edits everything on a dedicated screen right after this conversation — don't summarize or recap what you learned here, that's handled elsewhere.
 
 Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
 
 Respond with ONLY a json object, no other text, matching exactly one of these shapes:
 {"done": false, "question": "your next question", "quickReplies": ["optional", "short", "options"], "extracted": ["short label", "short label"]}
 {"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
-{"done": true, "recap": "your recap message", "knownIdentityFields": ["age"], "extracted": ["short label"]}
+{"done": true, "knownIdentityFields": ["age"], "extracted": ["short label"]}
 
 "extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, F1") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
 }
@@ -319,10 +317,10 @@ export async function POST(request: Request) {
 
   // Hard backstop independent of the client's own cap, in case that logic
   // ever has a bug. At MAX_BUILDER_TURNS dating simply ends; friendship and
-  // get_to_know get one more call forced to "done" (forceDone below) so the
-  // conversation still closes with its recap — and get_to_know with its
-  // identity chips — rather than being cut off. Past the post-cap allowance,
-  // never call the AI again no matter what.
+  // get_to_know get one more call forced to "done" (forceDone below) so
+  // get_to_know still gets a knownIdentityFields verdict for its identity
+  // chips rather than being cut off mid-decision. Past the post-cap
+  // allowance, never call the AI again no matter what.
   const isAdaptive = context === "friendship" || context === "get_to_know";
   const forceDone = conversation.length >= MAX_BUILDER_TURNS;
   if (
@@ -436,8 +434,6 @@ export async function POST(request: Request) {
         ? parsed.enhance.options.filter((s: unknown): s is string => typeof s === "string").slice(0, 3)
         : undefined;
 
-    const recap = typeof parsed.recap === "string" && parsed.recap.trim() ? parsed.recap.trim() : undefined;
-
     const knownIdentityFields =
       context === "get_to_know" && Array.isArray(parsed.knownIdentityFields)
         ? parsed.knownIdentityFields.filter((k: unknown): k is string => IDENTITY_FIELD_KEYS.includes(k as string))
@@ -448,7 +444,6 @@ export async function POST(request: Request) {
       question: enhanceOptions ? undefined : question,
       quickReplies: enhanceOptions ? undefined : quickReplies,
       enhance: enhanceOptions && enhanceOptions.length > 0 ? { options: enhanceOptions } : undefined,
-      recap: done ? recap : undefined,
       knownIdentityFields: done ? knownIdentityFields : undefined,
       extracted,
     });

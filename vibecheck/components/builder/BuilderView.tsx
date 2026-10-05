@@ -35,10 +35,13 @@ interface GenerateQuestionResponse {
   quickReplies?: string[];
   // Friendship/get_to_know only — see app/api/generate-question/route.ts.
   enhance?: { options: string[] };
-  recap?: string;
   knownIdentityFields?: string[];
   extracted?: string[];
 }
+
+// How long the static "Got it…" line (shown once done, before the identity
+// batch or the final card) stays up before advancing — see finishUp below.
+const DONE_LINE_MS = 1000;
 
 export function BuilderView() {
   const router = useRouter();
@@ -55,20 +58,20 @@ export function BuilderView() {
   // True when `error` is the API's rate-limit "busy" response — shown as
   // temporary load rather than as something broken.
   const [errorIsBusy, setErrorIsBusy] = useState(false);
-  // Friendship/get_to_know only, all three below — see their specs. An
-  // enhance offer replaces the next question for one turn; the recap is a
-  // single in-chat message shown once the model signals done, before the
-  // existing custom-question step; the identity batch (get_to_know only)
-  // is shown before that recap. Each is null everywhere else, including
-  // for dating, which never populates any of them.
+  // Friendship/get_to_know only — see their specs. An enhance offer
+  // replaces the next question for one turn; the identity batch (get_to_know
+  // only) is shown once the model signals done, before the final card. Both
+  // are null everywhere else, including for dating, which never populates
+  // either.
   const [enhanceOffer, setEnhanceOffer] = useState<EnhanceOffer | null>(null);
-  const [recapText, setRecapText] = useState<string | null>(null);
   const [identityBatch, setIdentityBatch] = useState<IdentityField[] | null>(null);
   const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
-  // Stashes the recap while the identity batch is being resolved, since the
-  // spec orders identity chips before the recap but the model returns both
-  // in the same "done" response.
-  const pendingRecapRef = useRef<string | null>(null);
+  // A brief static line shown the moment the model signals done (or the
+  // turn cap is hit) — replaces the old in-chat recap for every context.
+  // After DONE_LINE_MS it advances to the identity batch (get_to_know, if
+  // any fields are still unknown) or straight to the final card.
+  const [doneLineVisible, setDoneLineVisible] = useState(false);
+  const pendingIdentityBatchRef = useRef<IdentityField[] | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   // Whether the user is currently scrolled near the bottom — a ref (not
@@ -113,13 +116,35 @@ export function BuilderView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Shows the static done-line, then (after it clears — see the effect
+  // below) either the get_to_know identity batch or the final card. Wrapped
+  // in useCallback (stable, empty deps — it only touches a ref and a setter)
+  // so fetchNextQuestion below can safely close over it.
+  const finishUp = useCallback((identityFields: IdentityField[] | null) => {
+    pendingIdentityBatchRef.current = identityFields && identityFields.length > 0 ? identityFields : null;
+    setDoneLineVisible(true);
+  }, []);
+
+  useEffect(() => {
+    if (!doneLineVisible) return;
+    const timer = setTimeout(() => {
+      setDoneLineVisible(false);
+      const batch = pendingIdentityBatchRef.current;
+      pendingIdentityBatchRef.current = null;
+      if (batch) setIdentityBatch(batch);
+      else setIsDone(true);
+    }, DONE_LINE_MS);
+    return () => clearTimeout(timer);
+  }, [doneLineVisible]);
+
   const fetchNextQuestion = useCallback(async (current: GuestDraft, opts?: { skipEnhancement?: boolean }) => {
     // Mirrors the route's backstop: dating just ends at the cap; the other
-    // two still make one forced-"done" call there to get their recap.
+    // two still make one forced-"done" call there for get_to_know's
+    // identity-field verdict.
     const turnLimit =
       current.context === "dating" ? MAX_BUILDER_TURNS : MAX_BUILDER_TURNS + POST_CAP_TURN_ALLOWANCE;
     if (current.conversation.length >= turnLimit) {
-      setIsDone(true);
+      finishUp(null);
       return;
     }
     setIsThinking(true);
@@ -166,20 +191,12 @@ export function BuilderView() {
       }
 
       if (data.done || !data.question) {
-        if (current.context === "get_to_know" && data.recap) {
+        if (current.context === "get_to_know") {
           const known = new Set(data.knownIdentityFields ?? []);
-          const remaining = IDENTITY_FIELDS.filter((f) => !known.has(f.key));
-          if (remaining.length > 0) {
-            pendingRecapRef.current = data.recap;
-            setIdentityBatch(remaining);
-            return;
-          }
+          finishUp(IDENTITY_FIELDS.filter((f) => !known.has(f.key)));
+        } else {
+          finishUp(null);
         }
-        if (data.recap) {
-          setRecapText(data.recap);
-          return;
-        }
-        setIsDone(true);
         return;
       }
 
@@ -190,7 +207,7 @@ export function BuilderView() {
     } finally {
       if (!controller.signal.aborted) setIsThinking(false);
     }
-  }, []);
+  }, [finishUp]);
 
   // Whenever there's a draft but nothing pending/done/erroring, ask for the
   // next question. Covers both the initial question and every question
@@ -207,7 +224,7 @@ export function BuilderView() {
       error ||
       ageBlocked ||
       enhanceOffer ||
-      recapText ||
+      doneLineVisible ||
       identityBatch
     )
       return;
@@ -227,7 +244,7 @@ export function BuilderView() {
     error,
     ageBlocked,
     enhanceOffer,
-    recapText,
+    doneLineVisible,
     identityBatch,
     fetchNextQuestion,
   ]);
@@ -266,7 +283,7 @@ export function BuilderView() {
       el.scrollTop = el.scrollHeight;
     }
     justActedRef.current = false;
-  }, [draft?.conversation.length, pending, isThinking, enhanceOffer, recapText, identityBatch]);
+  }, [draft?.conversation.length, pending, isThinking, enhanceOffer, doneLineVisible, identityBatch]);
 
   function commitTurn(turn: DraftTurn) {
     if (!draft) return;
@@ -318,9 +335,9 @@ export function BuilderView() {
     setError(null);
     setInputValue("");
     setEnhanceOffer(null);
-    setRecapText(null);
+    setDoneLineVisible(false);
     setIdentityBatch(null);
-    pendingRecapRef.current = null;
+    pendingIdentityBatchRef.current = null;
     router.replace(`/create/build?context=${newContext}`);
   }
 
@@ -385,39 +402,17 @@ export function BuilderView() {
     fetchNextQuestion(draft, { skipEnhancement: true });
   }
 
-  // "Nope, that's me" proceeds straight into the existing custom-question
-  // step exactly as before this task (the isDone card below). The recap
-  // itself is never stored as a conversation turn — it's a chat moment for
-  // pacing only, not profile content.
-  function handleRecapConfirm() {
-    justActedRef.current = true;
-    setRecapText(null);
-    setIsDone(true);
-  }
-
-  // Reopens the normal composer for one more free-text answer, which feeds
-  // back into the conversation like any other turn — the main "decide
-  // next" effect picks up from there once `pending` clears, so the model
-  // may ask one more follow-up or re-recap on its own.
-  function handleRecapAddSomething() {
-    justActedRef.current = true;
-    setRecapText(null);
-    setPending({ question: "What would you like to add?" });
-  }
-
   // Resolves one field of the get_to_know-only optional identity batch.
-  // Once every field in the batch has been handled, shows the recap that
-  // was stashed alongside this same "done" response (see fetchNextQuestion).
+  // Once every field in the batch has been handled, goes straight to the
+  // final card — the done-line already played once before this batch ever
+  // showed (see finishUp), so there's nothing left to show in between.
   function resolveIdentityField(field: IdentityField, turn: DraftTurn) {
     justActedRef.current = true;
     commitTurn(turn);
     setIdentityBatch((current) => {
       const remaining = (current ?? []).filter((f) => f.key !== field.key);
       if (remaining.length === 0) {
-        const stashedRecap = pendingRecapRef.current;
-        pendingRecapRef.current = null;
-        if (stashedRecap) setRecapText(stashedRecap);
-        else setIsDone(true);
+        setIsDone(true);
         return null;
       }
       return remaining;
@@ -566,27 +561,7 @@ export function BuilderView() {
             </div>
           )}
 
-          {recapText && (
-            <div className="flex flex-col gap-2">
-              <AiBubble text={recapText} />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleRecapAddSomething}
-                  className="rounded-full border border-[#2A2726] bg-[#1F1B1A] px-3.5 py-2 text-[12px] font-semibold text-[#DDD4CC] hover:bg-[#262220]"
-                >
-                  Add something
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRecapConfirm}
-                  className="rounded-full bg-[#FF96C3] px-3.5 py-2 text-[12px] font-extrabold text-neutral-900"
-                >
-                  Nope, that&apos;s me →
-                </button>
-              </div>
-            </div>
-          )}
+          {doneLineVisible && <AiBubble text="Got it, let's build your Vibecheck ✨" />}
 
           {error && (
             <div
@@ -652,7 +627,7 @@ export function BuilderView() {
           <div ref={bottomRef} />
         </div>
 
-        {!isDone && !ageBlocked && !enhanceOffer && !recapText && !identityBatch && (
+        {!isDone && !ageBlocked && !enhanceOffer && !doneLineVisible && !identityBatch && (
           <div className="relative border-t border-[#2A2726] px-4 py-3.5">
             {skipMenuOpen && (
               <>
