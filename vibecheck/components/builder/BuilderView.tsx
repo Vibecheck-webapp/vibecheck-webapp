@@ -12,8 +12,11 @@ import {
   SLIDE_MATERIAL_TARGET,
   UNDER_18_AGE_REPLIES,
 } from "@/lib/builder-constants";
+import { ArrowLeftIcon } from "@/components/ui/ArrowLeftIcon";
 import {
+  clearDraft,
   createDraft,
+  hasFinishedDraft,
   loadDraft,
   saveDraft,
   type DraftTurn,
@@ -49,6 +52,9 @@ export function BuilderView() {
   const [ageBlocked, setAgeBlocked] = useState(false);
   const [skipMenuOpen, setSkipMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True when `error` is the API's rate-limit "busy" response — shown as
+  // temporary load rather than as something broken.
+  const [errorIsBusy, setErrorIsBusy] = useState(false);
   // Friendship/get_to_know only, all three below — see their specs. An
   // enhance offer replaces the next question for one turn; the recap is a
   // single in-chat message shown once the model signals done, before the
@@ -58,6 +64,7 @@ export function BuilderView() {
   const [enhanceOffer, setEnhanceOffer] = useState<EnhanceOffer | null>(null);
   const [recapText, setRecapText] = useState<string | null>(null);
   const [identityBatch, setIdentityBatch] = useState<IdentityField[] | null>(null);
+  const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
   // Stashes the recap while the identity batch is being resolved, since the
   // spec orders identity chips before the recap but the model returns both
   // in the same "done" response.
@@ -70,11 +77,24 @@ export function BuilderView() {
   // Forces the next auto-scroll even if the user had scrolled up, since they
   // just took an action that should bring them back to the live edge.
   const justActedRef = useRef(false);
+  // Aborts an in-flight generate-question call when the conversation is
+  // thrown away (switching vibes) — otherwise its response would land after
+  // the reset and saveDraft the old conversation's extractedAttributes
+  // straight back into storage.
+  const requestAbortRef = useRef<AbortController | null>(null);
 
   // Resume an in-progress draft if one exists; otherwise start a fresh one
   // from the ?context= the picker sent us. Runs once on mount only.
   useEffect(() => {
     const existing = loadDraft();
+    // A draft that already has a summary is past the builder — the only
+    // way back in is "Start a new Vibecheck" on the home page, which clears
+    // it. Without this, /create's "Resume" prompt or a typed URL would land
+    // here and start asking new questions on top of a finished vibe.
+    if (existing?.summary) {
+      router.replace(hasFinishedDraft(existing) ? "/create/preview" : "/create/summary");
+      return;
+    }
     if (existing) {
       // localStorage can't be read during SSR/first paint without a
       // hydration mismatch, so this has to happen post-mount in an effect.
@@ -104,9 +124,14 @@ export function BuilderView() {
     }
     setIsThinking(true);
     setError(null);
+    setErrorIsBusy(false);
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
     try {
       const res = await fetch("/api/generate-question", {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           context: current.context,
@@ -121,6 +146,10 @@ export function BuilderView() {
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
+        if (res.status === 429 || errBody?.error === "busy") {
+          setErrorIsBusy(true);
+          throw new Error(errBody?.message || "Lots of people vibing right now — try again in a moment.");
+        }
         throw new Error(errBody?.error ?? "Couldn't reach the AI.");
       }
       const data = (await res.json()) as GenerateQuestionResponse;
@@ -156,9 +185,10 @@ export function BuilderView() {
 
       setPending({ question: data.question, quickReplies: data.quickReplies });
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Couldn't reach the AI.");
     } finally {
-      setIsThinking(false);
+      if (!controller.signal.aborted) setIsThinking(false);
     }
   }, []);
 
@@ -277,12 +307,14 @@ export function BuilderView() {
   }
 
   function switchContext(newContext: ProfileContext) {
+    requestAbortRef.current?.abort();
     const fresh = createDraft(newContext);
     saveDraft(fresh);
     setDraft(fresh);
     setPending(null);
     setIsDone(false);
     setAgeBlocked(false);
+    setIsThinking(false);
     setError(null);
     setInputValue("");
     setEnhanceOffer(null);
@@ -290,6 +322,30 @@ export function BuilderView() {
     setIdentityBatch(null);
     pendingRecapRef.current = null;
     router.replace(`/create/build?context=${newContext}`);
+  }
+
+  // Back to the picker to choose a different vibe. The whole draft is
+  // cleared, not just the conversation: nothing in it outlives this
+  // unfinished vibe (summary is null here — see the mount guard — and a
+  // photo picked on /create/photo belongs to this same conversation).
+  // Clearing also matters for the picker itself: the builder resumes any
+  // stored draft regardless of ?context=, so a leftover one would hijack
+  // whichever vibe gets picked next.
+  function leaveToPicker() {
+    requestAbortRef.current?.abort();
+    clearDraft();
+    router.push("/create");
+  }
+
+  // Only confirm when there's something to lose. Dating's scripted name/age
+  // turns don't count — they're re-asked in seconds; skipped turns hold no
+  // answer at all.
+  function handleChangeVibe() {
+    if (!draft) return;
+    const scriptedCount = draft.context === "dating" ? SCRIPTED_OPENING_QUESTIONS.length : 0;
+    const hasRealAnswers = draft.conversation.some((t, i) => i >= scriptedCount && t.status === "answered");
+    if (hasRealAnswers) setSwitchConfirmOpen(true);
+    else leaveToPicker();
   }
 
   function handleSkip(status: "skipped_for_now" | "excluded") {
@@ -433,9 +489,18 @@ export function BuilderView() {
               {isDone ? "All done" : "We'll wrap up once we've got your vibe"}
             </div>
           </div>
-          <span className="rounded-full border border-[#2A2726] px-3 py-1.5 text-[12px] font-extrabold text-white/80">
+          <button
+            type="button"
+            onClick={handleChangeVibe}
+            title="Choose a different vibe"
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-[#2A2726] py-1.5 pr-3 pl-2 text-[12px] font-extrabold text-white/80 hover:bg-[#1A1817]"
+          >
+            <span className="flex h-4 w-4 items-center justify-center [&>svg]:h-4 [&>svg]:w-4">
+              <ArrowLeftIcon />
+            </span>
             {CONTEXT_LABEL[draft.context]}
-          </span>
+            <span className="sr-only"> — change vibe</span>
+          </button>
         </div>
 
         <div ref={logRef} className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5">
@@ -524,7 +589,13 @@ export function BuilderView() {
           )}
 
           {error && (
-            <div className="rounded-2xl border border-[#593438] bg-[#241416] px-4 py-3 text-[13px] text-[#FFB1B4]">
+            <div
+              className={
+                errorIsBusy
+                  ? "rounded-2xl border border-[#4A3941] bg-[#21181D] px-4 py-3 text-[13px] text-white/80"
+                  : "rounded-2xl border border-[#593438] bg-[#241416] px-4 py-3 text-[13px] text-[#FFB1B4]"
+              }
+            >
               {error}{" "}
               <button type="button" onClick={handleRetry} className="font-extrabold underline">
                 Try again
@@ -664,6 +735,41 @@ export function BuilderView() {
           </div>
         )}
       </div>
+      {switchConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="switch-vibe-title"
+            className="w-full max-w-[380px] rounded-[22px] border border-[#2A2726] bg-[#151313] p-6 text-center"
+          >
+            <div className="text-[28px]">🔄</div>
+            <h2 id="switch-vibe-title" className="mt-2 text-[18px] font-black text-white">
+              Switch vibes?
+            </h2>
+            <p className="mt-1.5 text-[13px] text-white/60">
+              Your current answers for this {CONTEXT_LABEL[draft.context]} Vibecheck will be lost.
+            </p>
+            <div className="mt-5 flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={leaveToPicker}
+                className="h-[44px] rounded-[14px] bg-[#FF96C3] text-[14px] font-extrabold text-neutral-900"
+              >
+                Switch vibes
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setSwitchConfirmOpen(false)}
+                className="h-[44px] rounded-[14px] border border-[#2A2726] text-[14px] font-extrabold text-white/80 hover:bg-[#1A1817]"
+              >
+                Keep going
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

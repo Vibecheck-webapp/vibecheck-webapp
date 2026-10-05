@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { getGroqClient, GROQ_MODEL } from "@/lib/groq";
+import {
+  getGroqClient,
+  GROQ_BUSY_MESSAGE,
+  GROQ_MODEL,
+  isGroqRateLimitError,
+  sleep,
+  withRateLimitRetry,
+} from "@/lib/groq";
 import { extractScriptedName, filterUsableTurns, type UsableTurn } from "@/lib/summarize-filter";
 import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
 
@@ -13,6 +20,11 @@ const VIBE_TAGS_MAX = 5;
 const INTERESTS_MAX = 12;
 const SLIDES_MIN = 2;
 const SLIDES_MAX = 5;
+
+// Pause before the JSON-validation retry so a failed call isn't immediately
+// followed by another one — back-to-back calls can themselves trip Groq's
+// rate limit rather than just recover from a bad response.
+const JSON_RETRY_DELAY_MS = 500;
 
 // Same mock-mode convention as generate-question, but gated on NODE_ENV too
 // — a summarization bug shipping mock/fake profile content to real users in
@@ -200,45 +212,51 @@ export async function POST(request: Request) {
   const userPrompt = `Here are their real answers:\n${buildIndexedTranscript(usable)}`;
 
   async function askOnce(extraInstruction?: string) {
-    const completion = await client.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: extraInstruction ? `${systemPrompt}\n\n${extraInstruction}` : systemPrompt,
-        },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 1,
-      top_p: 1,
-      // Generous headroom: reasoning tokens count against this limit before
-      // the visible JSON is emitted, and this output is much larger than a
-      // single question (headline + bio + tags + interests + ~4 slides) —
-      // the earlier json_validate_failed error came from too tight a cap.
-      max_completion_tokens: 2000,
-      reasoning_effort: "low",
-    });
+    const completion = await withRateLimitRetry("summarize-profile", { context, turns: usable.length }, () =>
+      client.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: extraInstruction ? `${systemPrompt}\n\n${extraInstruction}` : systemPrompt,
+          },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 1,
+        top_p: 1,
+        // Generous headroom: reasoning tokens count against this limit before
+        // the visible JSON is emitted, and this output is much larger than a
+        // single question (headline + bio + tags + interests + ~4 slides) —
+        // the earlier json_validate_failed error came from too tight a cap.
+        max_completion_tokens: 2000,
+        reasoning_effort: "low",
+      }),
+    );
     const raw = completion.choices[0]?.message?.content?.trim() || "{}";
     return JSON.parse(raw);
   }
 
   try {
-    let parsed: unknown;
     let result: SummaryResult | null = null;
     try {
-      parsed = await askOnce();
-      result = validateSummaryOutput(parsed, usable, scriptedName);
-    } catch {
-      result = null;
+      result = validateSummaryOutput(await askOnce(), usable, scriptedName);
+    } catch (err) {
+      // askOnce has already retried a 429 once — don't pile the JSON retry
+      // on top of a rate limit; report it as busy below.
+      if (isGroqRateLimitError(err)) throw err;
+      console.warn("summarize-profile: first attempt failed, retrying with JSON reminder", err);
     }
     if (!result) {
+      await sleep(JSON_RETRY_DELAY_MS);
       try {
-        parsed = await askOnce(
-          "Be concise. Output complete, valid JSON only — no markdown fences, no trailing text.",
+        result = validateSummaryOutput(
+          await askOnce("Be concise. Output complete, valid JSON only — no markdown fences, no trailing text."),
+          usable,
+          scriptedName,
         );
-        result = validateSummaryOutput(parsed, usable, scriptedName);
       } catch (err) {
+        if (isGroqRateLimitError(err)) throw err;
         console.error("summarize-profile retry failed to parse", err);
       }
     }
@@ -250,13 +268,9 @@ export async function POST(request: Request) {
     }
     return NextResponse.json(result);
   } catch (err) {
-    const status = (err as { status?: number } | null)?.status;
-    if (status === 429) {
-      console.error("summarize-profile rate limited", err);
-      return NextResponse.json(
-        { error: "busy", message: "Busy right now, try again in a moment." },
-        { status: 429 },
-      );
+    if (isGroqRateLimitError(err)) {
+      // Already logged with a [groq-429] tag by withRateLimitRetry.
+      return NextResponse.json({ error: "busy", message: GROQ_BUSY_MESSAGE }, { status: 429 });
     }
     console.error("summarize-profile failed", err);
     return NextResponse.json({ error: "Couldn't reach the AI. Try again." }, { status: 502 });

@@ -8,8 +8,20 @@ import {
   SLIDE_MATERIAL_PREFIX,
   SLIDE_MATERIAL_TARGET,
 } from "@/lib/builder-constants";
-import { getGroqClient, GROQ_MODEL } from "@/lib/groq";
+import {
+  getGroqClient,
+  GROQ_BUSY_MESSAGE,
+  GROQ_MODEL,
+  isGroqRateLimitError,
+  sleep,
+  withRateLimitRetry,
+} from "@/lib/groq";
 import { isProfileContext, type ProfileContext } from "@/lib/supabase/types";
+
+// Pause before the JSON-validation retry so a failed call isn't immediately
+// followed by another one — back-to-back calls can themselves trip Groq's
+// rate limit rather than just recover from a bad response.
+const JSON_RETRY_DELAY_MS = 500;
 
 // ============ TESTING SCAFFOLD — remove once a real provider is funded ============
 // AI_MOCK_MODE=true in .env.local bypasses DeepSeek entirely so the builder
@@ -53,9 +65,6 @@ const MOCK_QUESTIONS: Record<ProfileContext, string[]> = {
   ],
 };
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 // ============ end testing scaffold (declarations) ============
 
 const CONTEXT_PERSONA: Record<ProfileContext, string> = {
@@ -355,34 +364,36 @@ export async function POST(request: Request) {
     : buildDatingUserPrompt(conversation, extractedAttributes, forceDone);
 
   async function askOnce(extraInstruction?: string) {
-    const completion = await client.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: extraInstruction ? `${systemPrompt}\n\n${extraInstruction}` : systemPrompt,
-        },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 1,
-      top_p: 1,
-      // Generous headroom: reasoning_effort spends part of this budget on
-      // hidden reasoning tokens before the visible JSON is emitted, so a
-      // tight cap here truncates the JSON output mid-object. The adaptive
-      // contexts' much longer, more instruction-dense system prompts (the
-      // "tried:"-tracking rule especially) measurably drove up hidden
-      // reasoning-token usage in testing — occasionally enough to blow even
-      // a 900-token budget at "medium" effort and come back as Groq's
-      // json_validate_failed rather than a parseable object. Lower effort
-      // plus more headroom fixed it in testing; dating's prompt is much
-      // shorter and never showed this, so it's untouched.
-      // Dating went from 600 to 900 when it started returning its running
-      // "slide:" list (the shared stopping rule) — more visible output inside
-      // the same reasoning budget.
-      max_completion_tokens: isAdaptive ? 1400 : 900,
-      reasoning_effort: isAdaptive ? "low" : "medium",
-    });
+    const completion = await withRateLimitRetry("generate-question", { context, turn: conversation.length }, () =>
+      client.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: extraInstruction ? `${systemPrompt}\n\n${extraInstruction}` : systemPrompt,
+          },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 1,
+        top_p: 1,
+        // Generous headroom: reasoning_effort spends part of this budget on
+        // hidden reasoning tokens before the visible JSON is emitted, so a
+        // tight cap here truncates the JSON output mid-object. The adaptive
+        // contexts' much longer, more instruction-dense system prompts (the
+        // "tried:"-tracking rule especially) measurably drove up hidden
+        // reasoning-token usage in testing — occasionally enough to blow even
+        // a 900-token budget at "medium" effort and come back as Groq's
+        // json_validate_failed rather than a parseable object. Lower effort
+        // plus more headroom fixed it in testing; dating's prompt is much
+        // shorter and never showed this, so it's untouched.
+        // Dating went from 600 to 900 when it started returning its running
+        // "slide:" list (the shared stopping rule) — more visible output inside
+        // the same reasoning budget.
+        max_completion_tokens: isAdaptive ? 1400 : 900,
+        reasoning_effort: isAdaptive ? "low" : "medium",
+      }),
+    );
 
     const raw = completion.choices[0]?.message?.content?.trim() || "{}";
     return JSON.parse(raw);
@@ -392,7 +403,12 @@ export async function POST(request: Request) {
     let parsed;
     try {
       parsed = await askOnce();
-    } catch {
+    } catch (err) {
+      // askOnce has already retried a 429 once — don't pile a second call on
+      // top of a rate limit; report it as busy below.
+      if (isGroqRateLimitError(err)) throw err;
+      console.warn("generate-question: first attempt failed, retrying with JSON reminder", err);
+      await sleep(JSON_RETRY_DELAY_MS);
       parsed = await askOnce("Keep your response concise and ensure the JSON is complete and valid.");
     }
 
@@ -437,6 +453,10 @@ export async function POST(request: Request) {
       extracted,
     });
   } catch (err) {
+    if (isGroqRateLimitError(err)) {
+      // Already logged with a [groq-429] tag by withRateLimitRetry.
+      return NextResponse.json({ error: "busy", message: GROQ_BUSY_MESSAGE }, { status: 429 });
+    }
     console.error("generate-question failed", err);
     return NextResponse.json({ error: "Couldn't reach the AI. Try again." }, { status: 502 });
   }

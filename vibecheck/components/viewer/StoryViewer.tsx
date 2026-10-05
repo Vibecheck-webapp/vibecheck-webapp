@@ -107,9 +107,10 @@ function ReactButton({
   const nextBurstId = useRef(0);
 
   function handleClick() {
-    if (reacted) return;
+    const willReact = !reacted;
     onReact();
     setPopKey((k) => k + 1);
+    if (!willReact) return;
     const id = nextBurstId.current++;
     setBursts((prev) => [...prev, id]);
     setTimeout(() => setBursts((prev) => prev.filter((b) => b !== id)), 900);
@@ -242,6 +243,29 @@ export function StoryViewer({
     return () => ro.disconnect();
   }, [cardHeight, index]);
 
+  // The prev/next tap zones must never overlap the bottom action bar (React
+  // button, end-slide CTA). Out-ranking them by z-index can't work: the bar
+  // lives inside the content wrapper, which is its own stacking context at
+  // z-[2], so nothing inside it can beat the zones' z-[5]. Instead the zones
+  // stop exactly where the bar starts — measured, since its height differs
+  // per slide type (React button vs. CTA vs. nothing) and per breakpoint.
+  const bottomBarRef = useRef<HTMLDivElement>(null);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = bottomBarRef.current;
+    if (!el) return;
+    function measure() {
+      // An empty bar (intro slide, owner preview) is just padding — nothing
+      // to protect, so the zones keep the full height there.
+      setBottomBarHeight(el!.childElementCount > 0 ? el!.getBoundingClientRect().height : 0);
+    }
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [index]);
+
   function next() {
     if (index >= total - 1) return;
     setDirection(1);
@@ -253,7 +277,7 @@ export function StoryViewer({
     setIndex((i) => i - 1);
   }
   function handleReact() {
-    setReacted(true);
+    setReacted((prev) => !prev);
   }
 
   useEffect(() => {
@@ -304,14 +328,16 @@ export function StoryViewer({
           aria-label="Previous slide"
           onClick={prev}
           disabled={index === 0}
-          className="absolute inset-y-0 left-0 z-[5] w-[26%] cursor-pointer disabled:cursor-default"
+          style={{ bottom: bottomBarHeight }}
+          className="absolute top-0 left-0 z-[5] w-[26%] cursor-pointer disabled:cursor-default"
         />
         <button
           type="button"
           aria-label="Next slide"
           onClick={next}
           disabled={index === total - 1}
-          className="absolute inset-y-0 right-0 z-[5] w-[26%] cursor-pointer disabled:cursor-default"
+          style={{ bottom: bottomBarHeight }}
+          className="absolute top-0 right-0 z-[5] w-[26%] cursor-pointer disabled:cursor-default"
         />
 
         <div className="pointer-events-none relative z-[2] flex h-full flex-col">
@@ -437,6 +463,7 @@ export function StoryViewer({
 
           {/* pb clears the iOS home-indicator area on full-bleed mobile. */}
           <div
+            ref={bottomBarRef}
             style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
             className="flex items-center justify-between gap-2.5 px-3 sm:px-4 sm:pb-5"
           >

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ResumeDraftPrompt } from "@/components/builder/ResumeDraftPrompt";
 import { CreateNotice } from "@/components/create/CreateNotice";
+import { ArrowLeftIcon } from "@/components/ui/ArrowLeftIcon";
 import { BetaFooter } from "@/components/ui/BetaFooter";
 import { Pill } from "@/components/ui/Pill";
 import type { ProfileContext } from "@/lib/supabase/types";
@@ -51,21 +52,6 @@ const CONTEXTS: {
     blob: "bg-[#8FE3B0]",
   },
 ];
-
-function ArrowLeftIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <line x1="20.25" y1="12" x2="3.75" y2="12" stroke="#FFFDF9" strokeWidth="1.5" strokeLinecap="round" />
-      <polyline
-        points="10.5 5.25 3.75 12 10.5 18.75"
-        stroke="#FFFDF9"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 export default function CreatePage() {
   return (

@@ -30,6 +30,9 @@ export default function CreateSummaryPage() {
   const [draft, setDraft] = useState<GuestDraft | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // True when the failure was the API's rate-limit "busy" response — shown
+  // as temporary load rather than as something broken.
+  const [errorIsBusy, setErrorIsBusy] = useState(false);
 
   // Same guard pattern as /create/photo: no draft, or a dating draft the
   // age gate would have blocked, never reach this page — re-derived from
@@ -61,6 +64,7 @@ export default function CreateSummaryPage() {
   const generateSummary = useCallback(async (current: GuestDraft) => {
     setStatus("loading");
     setErrorMessage(null);
+    setErrorIsBusy(false);
     try {
       const res = await fetch("/api/summarize-profile", {
         method: "POST",
@@ -77,7 +81,8 @@ export default function CreateSummaryPage() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         if (res.status === 429 || errBody?.error === "busy") {
-          throw new Error(errBody?.message || "Busy right now, try again in a moment.");
+          setErrorIsBusy(true);
+          throw new Error(errBody?.message || "Lots of people vibing right now — try again in a moment.");
         }
         throw new Error(errBody?.error || "Couldn't build your summary.");
       }
@@ -182,8 +187,8 @@ export default function CreateSummaryPage() {
       )}
 
       {status === "error" && (
-        <Card className="mt-8 bg-[#241416] p-6 text-center">
-          <p className="text-[14px] text-[#FFB1B4]">{errorMessage}</p>
+        <Card className={`mt-8 p-6 text-center ${errorIsBusy ? "bg-[#21181D]" : "bg-[#241416]"}`}>
+          <p className={`text-[14px] ${errorIsBusy ? "text-white/80" : "text-[#FFB1B4]"}`}>{errorMessage}</p>
           <Button variant="primary" className="mt-4" onClick={() => generateSummary(draft)}>
             Try again
           </Button>
