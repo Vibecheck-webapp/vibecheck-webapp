@@ -3,9 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StoryViewer } from "@/components/viewer/StoryViewer";
-import { UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
 import { buildStorySlidesFromDraft } from "@/lib/build-story-slides";
-import { hasFinishedDraft, loadDraft, type GuestDraft } from "@/lib/guest-draft";
+import { hasFinishedDraft, isAgeBlocked, loadDraft, type GuestDraft } from "@/lib/guest-draft";
 
 // StoryViewer's own wrapper still contributes this much vertical padding
 // around the card even in ownerPreview mode (py-8 on mobile, sm:py-6 on
@@ -50,11 +49,10 @@ export default function CreatePreviewPage() {
       router.replace("/create/summary");
       return;
     }
-    // Same re-derivation as /create/photo and /create/summary: the age
-    // gate itself is live-only React state in BuilderView, never
-    // persisted, so it's checked again here from the raw scripted answer.
-    const ageAnswer = existing.context === "dating" ? existing.conversation[1]?.answer : null;
-    if (ageAnswer && UNDER_18_AGE_REPLIES.has(ageAnswer)) {
+    // Same guard as /create/photo and /create/summary — reads the same
+    // persisted flag the builder itself sets, see isAgeBlocked() in
+    // guest-draft.ts.
+    if (isAgeBlocked(existing)) {
       router.replace("/create?notice=age-restricted");
       return;
     }

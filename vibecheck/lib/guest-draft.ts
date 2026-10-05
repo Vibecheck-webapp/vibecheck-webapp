@@ -77,6 +77,15 @@ export interface GuestDraft {
   // get_to_know also keep attribute labels like "personality: introvert"
   // and "tried: <beat>" entries.
   extractedAttributes: string[];
+  // Dating only: set once the scripted age question gets an under-18 reply.
+  // Persisted (not just live React state in BuilderView) so the block
+  // survives a hard reload instead of silently resetting — read via
+  // isAgeBlocked() below, the one source of truth every guarded step
+  // (the builder itself, /create/photo, /create/summary, /create/preview)
+  // checks, rather than each re-deriving it from the raw scripted answer.
+  // Clears only by starting a fresh draft (switching vibe type, or the
+  // home page's explicit "Start a new Vibecheck").
+  ageBlocked: boolean;
 }
 
 const STORAGE_KEY = "vibecheck:guest-draft:v1";
@@ -112,6 +121,7 @@ export function createDraft(context: ProfileContext): GuestDraft {
     photoDataUrl,
     summary: null,
     extractedAttributes: [],
+    ageBlocked: false,
   };
 }
 
@@ -128,8 +138,14 @@ export function loadDraft(): GuestDraft | null {
     } catch {
       // Ignore — photo just comes back empty.
     }
-    // A draft saved before extractedAttributes existed simply won't have it.
-    return { ...parsed, extractedAttributes: parsed.extractedAttributes ?? [], photoDataUrl };
+    // A draft saved before extractedAttributes/ageBlocked existed simply
+    // won't have them.
+    return {
+      ...parsed,
+      extractedAttributes: parsed.extractedAttributes ?? [],
+      ageBlocked: parsed.ageBlocked ?? false,
+      photoDataUrl,
+    };
   } catch {
     return null;
   }
@@ -163,6 +179,13 @@ export function saveDraft(draft: GuestDraft) {
 // usable answers) already keeps such a draft from ever getting a summary.
 export function hasFinishedDraft(draft: GuestDraft | null): boolean {
   return !!draft && !!draft.summary && !!draft.summary.name?.trim() && draft.summary.slides.length >= 2;
+}
+
+// The one place every guarded step (the builder itself, /create/photo,
+// /create/summary, /create/preview) checks for the under-18 dating block —
+// see GuestDraft.ageBlocked above.
+export function isAgeBlocked(draft: GuestDraft | null): boolean {
+  return !!draft?.ageBlocked;
 }
 
 export function clearDraft() {

@@ -4,8 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "r
 import { useRouter } from "next/navigation";
 import { PhotoFrame } from "@/components/viewer/PhotoFrame";
 import { Button } from "@/components/ui/Button";
-import { UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
-import { loadDraft, saveDraft, type GuestDraft } from "@/lib/guest-draft";
+import { isAgeBlocked, loadDraft, saveDraft, type GuestDraft } from "@/lib/guest-draft";
 import { PhotoProcessingError, processPhotoFile } from "@/lib/process-photo";
 
 export default function CreatePhotoPage() {
@@ -23,13 +22,11 @@ export default function CreatePhotoPage() {
       router.replace("/create");
       return;
     }
-    // Nothing marks a dating draft as age-blocked in storage — the block in
-    // the builder is live-only React state, not persisted (see BuilderView's
-    // `ageBlocked`). So it's re-derived here from the raw scripted answer,
-    // to keep an under-18 dating draft from reaching this step by navigating
-    // here directly, e.g. after the builder tab was closed and reopened.
-    const ageAnswer = existing.context === "dating" ? existing.conversation[1]?.answer : null;
-    if (ageAnswer && UNDER_18_AGE_REPLIES.has(ageAnswer)) {
+    // Keeps an under-18 dating draft from reaching this step by navigating
+    // here directly (e.g. after the builder tab was closed and reopened) —
+    // reads the same persisted flag the builder itself sets, see
+    // isAgeBlocked() in guest-draft.ts.
+    if (isAgeBlocked(existing)) {
       router.replace("/create");
       return;
     }

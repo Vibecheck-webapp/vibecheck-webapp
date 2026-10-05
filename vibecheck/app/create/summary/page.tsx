@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { UNDER_18_AGE_REPLIES } from "@/lib/builder-constants";
 import {
+  isAgeBlocked,
   loadDraft,
   saveDraft,
   type DraftSlide,
@@ -35,17 +35,15 @@ export default function CreateSummaryPage() {
   const [errorIsBusy, setErrorIsBusy] = useState(false);
 
   // Same guard pattern as /create/photo: no draft, or a dating draft the
-  // age gate would have blocked, never reach this page — re-derived from
-  // the raw scripted answer since the gate itself is live-only React state
-  // in BuilderView, not persisted anywhere.
+  // age gate blocked, never reach this page — reads the same persisted
+  // flag the builder itself sets, see isAgeBlocked() in guest-draft.ts.
   useEffect(() => {
     const existing = loadDraft();
     if (!existing) {
       router.replace("/create?notice=start-first");
       return;
     }
-    const ageAnswer = existing.context === "dating" ? existing.conversation[1]?.answer : null;
-    if (ageAnswer && UNDER_18_AGE_REPLIES.has(ageAnswer)) {
+    if (isAgeBlocked(existing)) {
       router.replace("/create?notice=age-restricted");
       return;
     }

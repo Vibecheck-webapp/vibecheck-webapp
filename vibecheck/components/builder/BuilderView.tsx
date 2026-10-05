@@ -17,6 +17,7 @@ import {
   clearDraftConversation,
   createDraft,
   hasFinishedDraft,
+  isAgeBlocked,
   loadDraft,
   saveDraft,
   type DraftTurn,
@@ -52,7 +53,12 @@ export function BuilderView() {
   const [inputValue, setInputValue] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [isDone, setIsDone] = useState(false);
-  const [ageBlocked, setAgeBlocked] = useState(false);
+  // Derived straight from the loaded/saved draft, not separate React state —
+  // isAgeBlocked() is the one source of truth every guarded step (this
+  // builder, /create/photo, /create/summary, /create/preview) reads, so a
+  // hard reload mid-block can't silently reset it back to false here while
+  // those other pages still correctly enforce it.
+  const ageBlocked = isAgeBlocked(draft);
   const [skipMenuOpen, setSkipMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // True when `error` is the API's rate-limit "busy" response — shown as
@@ -345,18 +351,22 @@ export function BuilderView() {
     // age in friendship/get_to_know is informational only.
     const isAgeQuestion = draft.conversation.length === 1;
     const isNameFallback = nameFallbackActiveRef.current;
+    const blocksAge = isAgeQuestion && draft.context === "dating" && UNDER_18_AGE_REPLIES.has(answer);
 
     justActedRef.current = true;
     commitTurn(
       { question: pending.question, answer, status: "answered", quickReplies: pending.quickReplies },
-      // Synthesized directly — this question never goes through the AI, so
-      // nothing else would ever add a "name:" entry for it.
-      isNameFallback ? { extractedAttributes: [...draft.extractedAttributes, `name: ${answer}`] } : undefined,
+      {
+        // Persisted on the draft itself (not separate React state) so a
+        // hard reload can't silently un-block the builder — see
+        // isAgeBlocked() in guest-draft.ts.
+        ...(blocksAge ? { ageBlocked: true } : null),
+        // Synthesized directly — this question never goes through the AI,
+        // so nothing else would ever add a "name:" entry for it.
+        ...(isNameFallback ? { extractedAttributes: [...draft.extractedAttributes, `name: ${answer}`] } : null),
+      },
     );
 
-    if (isAgeQuestion && draft.context === "dating" && UNDER_18_AGE_REPLIES.has(answer)) {
-      setAgeBlocked(true);
-    }
     if (isNameFallback) {
       nameFallbackActiveRef.current = false;
       finishUp(pendingIdentityBatchRef.current);
@@ -370,7 +380,6 @@ export function BuilderView() {
     setDraft(fresh);
     setPending(null);
     setIsDone(false);
-    setAgeBlocked(false);
     setIsThinking(false);
     setError(null);
     setInputValue("");
