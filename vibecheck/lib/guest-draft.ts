@@ -87,6 +87,18 @@ const PHOTO_STORAGE_KEY = "vibecheck:guest-draft-photo:v1";
 
 export function createDraft(context: ProfileContext): GuestDraft {
   const now = new Date().toISOString();
+  // A photo already picked for this browser session's in-progress vibe
+  // isn't conversation-specific — carries forward into a fresh draft (e.g.
+  // after switching vibe type mid-builder, see clearDraftConversation
+  // below) so it only ever disappears via an explicit clearDraft().
+  let photoDataUrl: string | null = null;
+  if (typeof window !== "undefined") {
+    try {
+      photoDataUrl = window.sessionStorage.getItem(PHOTO_STORAGE_KEY);
+    } catch {
+      // Ignore — starts with no photo.
+    }
+  }
   return {
     version: 1,
     context,
@@ -97,7 +109,7 @@ export function createDraft(context: ProfileContext): GuestDraft {
     bio: null,
     vibe_tags: [],
     interests: [],
-    photoDataUrl: null,
+    photoDataUrl,
     summary: null,
     extractedAttributes: [],
   };
@@ -162,6 +174,23 @@ export function clearDraft() {
   }
   try {
     window.sessionStorage.removeItem(PHOTO_STORAGE_KEY);
+  } catch {
+    // Ignore.
+  }
+}
+
+// Clears only the stored conversation draft — deliberately leaves any
+// already-picked photo in sessionStorage alone, since createDraft() picks
+// it back up for whichever context gets chosen next. Used when backing out
+// to the context picker mid-builder to switch vibe type (conversation,
+// age-gate flag and extracted info should reset; the photo and
+// draft.summary, which this never touches, should not). clearDraft() above
+// is the one that wipes everything, including the photo, for an explicit
+// "start over" action.
+export function clearDraftConversation() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
   } catch {
     // Ignore.
   }

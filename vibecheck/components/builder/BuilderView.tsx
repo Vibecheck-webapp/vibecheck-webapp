@@ -14,7 +14,7 @@ import {
 } from "@/lib/builder-constants";
 import { ArrowLeftIcon } from "@/components/ui/ArrowLeftIcon";
 import {
-  clearDraft,
+  clearDraftConversation,
   createDraft,
   hasFinishedDraft,
   loadDraft,
@@ -324,16 +324,16 @@ export function BuilderView() {
     router.replace(`/create/build?context=${newContext}`);
   }
 
-  // Back to the picker to choose a different vibe. The whole draft is
-  // cleared, not just the conversation: nothing in it outlives this
-  // unfinished vibe (summary is null here — see the mount guard — and a
-  // photo picked on /create/photo belongs to this same conversation).
-  // Clearing also matters for the picker itself: the builder resumes any
+  // Back to the picker to choose a different vibe. Only the conversation
+  // draft is cleared — not the photo, which createDraft() picks back up for
+  // whichever context gets chosen next (summary is always null here, see
+  // the mount guard, so there's nothing to lose there either). Clearing the
+  // draft still matters for the picker itself: the builder resumes any
   // stored draft regardless of ?context=, so a leftover one would hijack
   // whichever vibe gets picked next.
   function leaveToPicker() {
     requestAbortRef.current?.abort();
-    clearDraft();
+    clearDraftConversation();
     router.push("/create");
   }
 
