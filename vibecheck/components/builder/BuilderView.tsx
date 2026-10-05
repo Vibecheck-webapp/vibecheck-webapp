@@ -72,6 +72,15 @@ export function BuilderView() {
   // any fields are still unknown) or straight to the final card.
   const [doneLineVisible, setDoneLineVisible] = useState(false);
   const pendingIdentityBatchRef = useRef<IdentityField[] | null>(null);
+  // Friendship/get_to_know only: their openers never scripted-ask a name
+  // the way dating's first turn does, so if none got extracted by the time
+  // the conversation would otherwise end, one scripted "What should I call
+  // you?" turn (no AI call) is inserted before finishing — see
+  // finishUpOrAskName. askedNameFallbackRef guarantees it only ever fires
+  // once; nameFallbackActiveRef tells handleSend this particular `pending`
+  // question needs the special no-AI-call handling.
+  const askedNameFallbackRef = useRef(false);
+  const nameFallbackActiveRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   // Whether the user is currently scrolled near the bottom — a ref (not
@@ -125,6 +134,28 @@ export function BuilderView() {
     setDoneLineVisible(true);
   }, []);
 
+  // Same as finishUp, except friendship/get_to_know insert one scripted
+  // "What should I call you?" turn first if no name has been extracted yet
+  // — stashing identityFields for after that turn resolves (see
+  // handleSend's isNameFallback branch) rather than finishing immediately.
+  const finishUpOrAskName = useCallback(
+    (current: GuestDraft, identityFields: IdentityField[] | null) => {
+      const needsName =
+        (current.context === "friendship" || current.context === "get_to_know") &&
+        !askedNameFallbackRef.current &&
+        !current.extractedAttributes.some((e) => /^name\s*:/i.test(e.trim()));
+      if (needsName) {
+        askedNameFallbackRef.current = true;
+        nameFallbackActiveRef.current = true;
+        pendingIdentityBatchRef.current = identityFields && identityFields.length > 0 ? identityFields : null;
+        setPending({ question: "What should I call you?" });
+        return;
+      }
+      finishUp(identityFields);
+    },
+    [finishUp],
+  );
+
   useEffect(() => {
     if (!doneLineVisible) return;
     const timer = setTimeout(() => {
@@ -144,7 +175,7 @@ export function BuilderView() {
     const turnLimit =
       current.context === "dating" ? MAX_BUILDER_TURNS : MAX_BUILDER_TURNS + POST_CAP_TURN_ALLOWANCE;
     if (current.conversation.length >= turnLimit) {
-      finishUp(null);
+      finishUpOrAskName(current, null);
       return;
     }
     setIsThinking(true);
@@ -179,10 +210,13 @@ export function BuilderView() {
       }
       const data = (await res.json()) as GenerateQuestionResponse;
 
+      // Carries the just-updated extracted list forward so the name check
+      // below (and anything else reading `current`) sees this response's
+      // own data, not the turn-stale snapshot fetchNextQuestion was called with.
+      const latest: GuestDraft = data.extracted ? { ...current, extractedAttributes: data.extracted } : current;
       if (data.extracted) {
-        const withExtracted: GuestDraft = { ...current, extractedAttributes: data.extracted };
-        saveDraft(withExtracted);
-        setDraft(withExtracted);
+        saveDraft(latest);
+        setDraft(latest);
       }
 
       if (data.enhance && data.enhance.options.length > 0) {
@@ -193,9 +227,9 @@ export function BuilderView() {
       if (data.done || !data.question) {
         if (current.context === "get_to_know") {
           const known = new Set(data.knownIdentityFields ?? []);
-          finishUp(IDENTITY_FIELDS.filter((f) => !known.has(f.key)));
+          finishUpOrAskName(latest, IDENTITY_FIELDS.filter((f) => !known.has(f.key)));
         } else {
-          finishUp(null);
+          finishUpOrAskName(latest, null);
         }
         return;
       }
@@ -207,7 +241,7 @@ export function BuilderView() {
     } finally {
       if (!controller.signal.aborted) setIsThinking(false);
     }
-  }, [finishUp]);
+  }, [finishUpOrAskName]);
 
   // Whenever there's a draft but nothing pending/done/erroring, ask for the
   // next question. Covers both the initial question and every question
@@ -285,11 +319,12 @@ export function BuilderView() {
     justActedRef.current = false;
   }, [draft?.conversation.length, pending, isThinking, enhanceOffer, doneLineVisible, identityBatch]);
 
-  function commitTurn(turn: DraftTurn) {
+  function commitTurn(turn: DraftTurn, extraPatch?: Partial<GuestDraft>) {
     if (!draft) return;
     const updated: GuestDraft = {
       ...draft,
       conversation: [...draft.conversation, turn],
+      ...extraPatch,
       updatedAt: new Date().toISOString(),
     };
     saveDraft(updated);
@@ -309,17 +344,22 @@ export function BuilderView() {
     // to identify it by. Only dating actually gates on the answer; asking
     // age in friendship/get_to_know is informational only.
     const isAgeQuestion = draft.conversation.length === 1;
+    const isNameFallback = nameFallbackActiveRef.current;
 
     justActedRef.current = true;
-    commitTurn({
-      question: pending.question,
-      answer,
-      status: "answered",
-      quickReplies: pending.quickReplies,
-    });
+    commitTurn(
+      { question: pending.question, answer, status: "answered", quickReplies: pending.quickReplies },
+      // Synthesized directly — this question never goes through the AI, so
+      // nothing else would ever add a "name:" entry for it.
+      isNameFallback ? { extractedAttributes: [...draft.extractedAttributes, `name: ${answer}`] } : undefined,
+    );
 
     if (isAgeQuestion && draft.context === "dating" && UNDER_18_AGE_REPLIES.has(answer)) {
       setAgeBlocked(true);
+    }
+    if (isNameFallback) {
+      nameFallbackActiveRef.current = false;
+      finishUp(pendingIdentityBatchRef.current);
     }
   }
 
@@ -338,6 +378,8 @@ export function BuilderView() {
     setDoneLineVisible(false);
     setIdentityBatch(null);
     pendingIdentityBatchRef.current = null;
+    askedNameFallbackRef.current = false;
+    nameFallbackActiveRef.current = false;
     router.replace(`/create/build?context=${newContext}`);
   }
 
@@ -367,6 +409,7 @@ export function BuilderView() {
 
   function handleSkip(status: "skipped_for_now" | "excluded") {
     if (!pending) return;
+    const isNameFallback = nameFallbackActiveRef.current;
     justActedRef.current = true;
     commitTurn({
       question: pending.question,
@@ -374,6 +417,10 @@ export function BuilderView() {
       status,
       quickReplies: pending.quickReplies,
     });
+    if (isNameFallback) {
+      nameFallbackActiveRef.current = false;
+      finishUp(pendingIdentityBatchRef.current);
+    }
   }
 
   // Selecting a rewritten option REPLACES the most recent turn's stored
