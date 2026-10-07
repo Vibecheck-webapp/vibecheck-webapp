@@ -121,11 +121,25 @@ export function BuilderView() {
       window.location.href = hasFinishedDraft(existing) ? "/create/preview" : "/create/summary";
       return;
     }
+    const contextParam = searchParams.get("context");
+    // A ?context= that doesn't match an existing (summary-less) draft means
+    // the user explicitly chose a different vibe than the one left in
+    // storage — most often the picker's own context-pick link, whose href
+    // alone (no clearDraftConversation) is exactly what fires if its
+    // onClick doesn't run, see ContextPicker's handlePickClick. Starting
+    // fresh here — not resuming the mismatched draft — is the actual
+    // guarantee against a leftover draft hijacking a context the user
+    // explicitly asked for, regardless of whether that onClick got to run.
+    if (existing && isProfileContext(contextParam) && existing.context !== contextParam) {
+      const fresh = createDraft(contextParam);
+      saveDraft(fresh);
+      setDraft(fresh);
+      return;
+    }
     if (existing) {
       setDraft(existing);
       return;
     }
-    const contextParam = searchParams.get("context");
     if (!isProfileContext(contextParam)) {
       window.location.href = "/create";
       return;

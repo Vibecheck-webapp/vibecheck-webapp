@@ -52,20 +52,8 @@ const CONTEXTS: {
   },
 ];
 
-// A real browser navigation, not router.push — Next's client-side router
-// tracks the current route itself, separately from the browser's own
-// address bar/history, and a gesture-driven back navigation (swipe, or any
-// path that restores this page from the back-forward cache) bypasses that
-// tracking entirely: the URL changes but the router's own idea of "where
-// we are" doesn't update with it. router.push for a route the router
-// (wrongly) believes is already current can silently no-op — which reads
-// exactly like "I picked a different vibe and nothing happened," and only
-// the browser's own real back button (which doesn't hit this desync)
-// recovers it. A full navigation here sidesteps that router state
-// entirely, at the cost of a real page load instead of a client transition
-// — a fine trade for a once-per-vibe-pick action.
-function goToBuilder(context: ProfileContext) {
-  window.location.href = `/create/build?context=${context}`;
+function builderHref(context: ProfileContext) {
+  return `/create/build?context=${context}`;
 }
 
 // Scripted turns (dating's name/age) don't count as "real" — losing them
@@ -111,29 +99,28 @@ export function ContextPicker() {
     setDraft(null);
   }
 
-  function pick(context: ProfileContext) {
-    // No resumable draft, or picking the same vibe that's already in
-    // progress: straight through, nothing to lose.
-    if (!draft || draft.context === context) {
-      goToBuilder(context);
-      return;
-    }
+  // Each vibe card is a REAL anchor (href set below), not a button with an
+  // imperative navigate call — if this onClick doesn't fire for any reason
+  // (the suspected cause of the original bug: React's synthetic click
+  // handling can end up in a broken state after this page is restored from
+  // the back-forward cache by a gesture-driven back navigation, in which
+  // case no onClick anywhere on the page would fire, not just this one),
+  // the browser's own native click-follows-href behavior still gets the
+  // user to the builder. The only thing that degrades in that fallback
+  // path is losing the confirm step and the old draft not being cleared
+  // first — BuilderView's own mount logic (see its syncDraftFromStorage)
+  // is what actually guarantees a mismatched ?context= always wins over a
+  // leftover draft, so a real vibe switch still happens either way.
+  function handlePickClick(e: React.MouseEvent, context: ProfileContext) {
+    // No resumable draft, or picking the same vibe already in progress:
+    // nothing to intercept, let the href navigate natively.
+    if (!draft || draft.context === context) return;
     if (!hasRealAnswers(draft)) {
       clearDraftConversation();
-      goToBuilder(context);
       return;
     }
+    e.preventDefault();
     setPendingContext(context);
-  }
-
-  function confirmSwitch() {
-    if (!pendingContext) return;
-    // Clears only the in-progress conversation (draft.summary is always
-    // null here — a finished draft redirects out of the builder long
-    // before reaching this picker again — and the photo isn't
-    // context-specific, see clearDraftConversation in guest-draft.ts).
-    clearDraftConversation();
-    goToBuilder(pendingContext);
   }
 
   return (
@@ -148,13 +135,12 @@ export function ContextPicker() {
             </span>
           </div>
           <div className="flex shrink-0 gap-2">
-            <button
-              type="button"
-              onClick={() => goToBuilder(draft.context)}
+            <a
+              href={builderHref(draft.context)}
               className="rounded-full bg-[#FF96C3] px-3.5 py-2 text-[12px] font-extrabold text-neutral-900"
             >
               Resume
-            </button>
+            </a>
             <button
               type="button"
               onClick={handleStartFresh}
@@ -168,10 +154,10 @@ export function ContextPicker() {
 
       <div className="mt-8 grid gap-4 sm:grid-cols-3">
         {CONTEXTS.map((c) => (
-          <button
+          <a
             key={c.context}
-            type="button"
-            onClick={() => pick(c.context)}
+            href={builderHref(c.context)}
+            onClick={(e) => handlePickClick(e, c.context)}
             className="group relative flex min-h-[210px] flex-col items-center justify-between overflow-hidden rounded-[22px] border border-[#2A2726] bg-[#171514] p-5 text-center transition-colors hover:border-[#4A4541]"
           >
             <span
@@ -190,7 +176,7 @@ export function ContextPicker() {
             <div className={`relative mt-3 font-inter text-[12px] leading-[100%] font-bold ${c.accent}`}>
               {c.tags}
             </div>
-          </button>
+          </a>
         ))}
       </div>
 
@@ -210,13 +196,23 @@ export function ContextPicker() {
               Your current answers for this {draft ? CONTEXT_LABEL[draft.context] : ""} Vibecheck will be lost.
             </p>
             <div className="mt-5 flex flex-col gap-2.5">
-              <button
-                type="button"
-                onClick={confirmSwitch}
-                className="h-[44px] rounded-[14px] bg-[#FF96C3] text-[14px] font-extrabold text-neutral-900"
+              <a
+                href={builderHref(pendingContext)}
+                onClick={() => {
+                  // Clears only the in-progress conversation (draft.summary
+                  // is always null here — a finished draft redirects out of
+                  // the builder long before reaching this picker again —
+                  // and the photo isn't context-specific, see
+                  // clearDraftConversation in guest-draft.ts). By this
+                  // point the confirm dialog is already showing, so this
+                  // onClick firing isn't in doubt the way the card's own
+                  // is — see handlePickClick.
+                  clearDraftConversation();
+                }}
+                className="flex h-[44px] items-center justify-center rounded-[14px] bg-[#FF96C3] text-[14px] font-extrabold text-neutral-900"
               >
                 Switch vibes
-              </button>
+              </a>
               <button
                 type="button"
                 autoFocus
