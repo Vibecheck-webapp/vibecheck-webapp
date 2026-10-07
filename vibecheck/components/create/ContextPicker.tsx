@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { SCRIPTED_OPENING_QUESTIONS } from "@/lib/builder-constants";
 import { clearDraftConversation, loadDraft, type GuestDraft } from "@/lib/guest-draft";
 import { CONTEXT_LABEL } from "@/lib/profile-meta";
@@ -53,6 +52,22 @@ const CONTEXTS: {
   },
 ];
 
+// A real browser navigation, not router.push — Next's client-side router
+// tracks the current route itself, separately from the browser's own
+// address bar/history, and a gesture-driven back navigation (swipe, or any
+// path that restores this page from the back-forward cache) bypasses that
+// tracking entirely: the URL changes but the router's own idea of "where
+// we are" doesn't update with it. router.push for a route the router
+// (wrongly) believes is already current can silently no-op — which reads
+// exactly like "I picked a different vibe and nothing happened," and only
+// the browser's own real back button (which doesn't hit this desync)
+// recovers it. A full navigation here sidesteps that router state
+// entirely, at the cost of a real page load instead of a client transition
+// — a fine trade for a once-per-vibe-pick action.
+function goToBuilder(context: ProfileContext) {
+  window.location.href = `/create/build?context=${context}`;
+}
+
 // Scripted turns (dating's name/age) don't count as "real" — losing them
 // costs nothing, they're re-asked in seconds. Matches BuilderView's own
 // switch-vibe confirm logic exactly, so the two can never disagree about
@@ -68,7 +83,6 @@ function hasRealAnswers(draft: GuestDraft): boolean {
 // land on an actually-usable picker, not get bounced straight back into
 // the builder.
 export function ContextPicker() {
-  const router = useRouter();
   const [draft, setDraft] = useState<GuestDraft | null>(null);
   const [pendingContext, setPendingContext] = useState<ProfileContext | null>(null);
 
@@ -101,12 +115,12 @@ export function ContextPicker() {
     // No resumable draft, or picking the same vibe that's already in
     // progress: straight through, nothing to lose.
     if (!draft || draft.context === context) {
-      router.push(`/create/build?context=${context}`);
+      goToBuilder(context);
       return;
     }
     if (!hasRealAnswers(draft)) {
       clearDraftConversation();
-      router.push(`/create/build?context=${context}`);
+      goToBuilder(context);
       return;
     }
     setPendingContext(context);
@@ -119,7 +133,7 @@ export function ContextPicker() {
     // before reaching this picker again — and the photo isn't
     // context-specific, see clearDraftConversation in guest-draft.ts).
     clearDraftConversation();
-    router.push(`/create/build?context=${pendingContext}`);
+    goToBuilder(pendingContext);
   }
 
   return (
@@ -136,7 +150,7 @@ export function ContextPicker() {
           <div className="flex shrink-0 gap-2">
             <button
               type="button"
-              onClick={() => router.push(`/create/build?context=${draft.context}`)}
+              onClick={() => goToBuilder(draft.context)}
               className="rounded-full bg-[#FF96C3] px-3.5 py-2 text-[12px] font-extrabold text-neutral-900"
             >
               Resume

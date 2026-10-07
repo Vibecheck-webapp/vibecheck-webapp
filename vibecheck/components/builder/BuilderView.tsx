@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   countSlideMaterial,
   IDENTITY_FIELDS,
@@ -45,7 +45,6 @@ interface GenerateQuestionResponse {
 const DONE_LINE_MS = 1000;
 
 export function BuilderView() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [draft, setDraft] = useState<GuestDraft | null>(null);
@@ -103,7 +102,15 @@ export function BuilderView() {
   const requestAbortRef = useRef<AbortController | null>(null);
 
   // Resume an in-progress draft if one exists; otherwise start a fresh one
-  // from the ?context= the picker sent us.
+  // from the ?context= the picker sent us. Redirects use a real navigation
+  // (window.location), not router.replace — this runs from the pageshow
+  // handler below too, specifically to recover from a back-forward-cache
+  // restore, and Next's client router tracks its own idea of "the current
+  // route" separately from the browser's actual history/URL. A bfcache
+  // restore changes the URL without the router ever finding out, so
+  // router.replace("/create") called right after can silently no-op if the
+  // router still believes /create is already current — the same failure
+  // mode as ContextPicker's goToBuilder, see its comment for the full story.
   const syncDraftFromStorage = useCallback(() => {
     const existing = loadDraft();
     // A draft that already has a summary is past the builder — the only
@@ -111,7 +118,7 @@ export function BuilderView() {
     // it. Without this, /create's "Resume" prompt or a typed URL would land
     // here and start asking new questions on top of a finished vibe.
     if (existing?.summary) {
-      router.replace(hasFinishedDraft(existing) ? "/create/preview" : "/create/summary");
+      window.location.href = hasFinishedDraft(existing) ? "/create/preview" : "/create/summary";
       return;
     }
     if (existing) {
@@ -120,13 +127,13 @@ export function BuilderView() {
     }
     const contextParam = searchParams.get("context");
     if (!isProfileContext(contextParam)) {
-      router.replace("/create");
+      window.location.href = "/create";
       return;
     }
     const fresh = createDraft(contextParam);
     saveDraft(fresh);
     setDraft(fresh);
-  }, [router, searchParams]);
+  }, [searchParams]);
 
   // localStorage can't be read during SSR/first paint without a hydration
   // mismatch, so this has to happen post-mount in an effect. Runs once on
@@ -420,7 +427,9 @@ export function BuilderView() {
     pendingIdentityBatchRef.current = null;
     askedNameFallbackRef.current = false;
     nameFallbackActiveRef.current = false;
-    router.replace(`/create/build?context=${newContext}`);
+    // Real navigation, not router.replace — see syncDraftFromStorage's
+    // comment above for why.
+    window.location.href = `/create/build?context=${newContext}`;
   }
 
   // Back to the picker to choose a different vibe. Only the conversation
@@ -433,7 +442,9 @@ export function BuilderView() {
   function leaveToPicker() {
     requestAbortRef.current?.abort();
     clearDraftConversation();
-    router.push("/create");
+    // Real navigation, not router.push — see syncDraftFromStorage's
+    // comment above for why.
+    window.location.href = "/create";
   }
 
   // Only confirm when there's something to lose. Dating's scripted name/age
@@ -518,7 +529,9 @@ export function BuilderView() {
 
   function handleSaveAndLeave() {
     if (draft) saveDraft(draft);
-    router.push("/?draftSaved=1");
+    // Real navigation, not router.push — see syncDraftFromStorage's
+    // comment above for why.
+    window.location.href = "/?draftSaved=1";
   }
 
   function handleRetry() {
