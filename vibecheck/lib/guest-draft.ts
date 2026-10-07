@@ -40,6 +40,12 @@ export interface DraftSummary {
   slides: DraftSlide[];
   sourceConversation: DraftTurn[];
   generatedAt: string;
+  // True when this is a placeholder shell from the API's "not enough usable
+  // answers" result rather than a real generated summary — see
+  // /create/summary's generateSummary. Only ever holds any user-added
+  // slides (source_index null); headline/bio/tags/interests are empty.
+  // Optional/falsy for every summary generated before this existed.
+  notEnough?: boolean;
 }
 
 // Shaped to map cleanly onto a future `profiles` insert: `context` is used
