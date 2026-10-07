@@ -89,6 +89,7 @@ export function BuilderView() {
   const nameFallbackActiveRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Whether the user is currently scrolled near the bottom — a ref (not
   // state) so tracking it doesn't itself cause re-renders.
   const isNearBottomRef = useRef(true);
@@ -343,6 +344,18 @@ export function BuilderView() {
     justActedRef.current = false;
   }, [draft?.conversation.length, pending, isThinking, enhanceOffer, doneLineVisible, identityBatch]);
 
+  // Grows the textarea with its content instead of staying a fixed size —
+  // CSS min/max-height alone (below) only set the floor/ceiling; this is
+  // what actually moves it between them. Resets to "auto" first so a
+  // shrinking edit (e.g. deleting text) can shrink the box back down too,
+  // not just grow it.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [inputValue]);
+
   function commitTurn(turn: DraftTurn, extraPatch?: Partial<GuestDraft>) {
     if (!draft) return;
     const updated: GuestDraft = {
@@ -547,8 +560,15 @@ export function BuilderView() {
         </button>
       </div>
 
-      <div className="flex h-[calc(100dvh-220px)] min-h-[560px] flex-col overflow-hidden rounded-[30px] border border-[#2A2726] bg-[#111]">
-        <div className="flex items-center justify-between border-b border-[#2A2726] px-5 py-4">
+      {/* Mobile (<640px): a plain svh-based height instead of the desktop
+          calc() subtraction, which left almost nothing for the actual
+          message log once the sticky progress bar, card header and input
+          area were accounted for — the log's own min-h-[45svh] below is
+          what actually guarantees room for messages regardless of how
+          much the rest of the chrome ends up taking. Desktop (sm:) keeps
+          the original calc()/min-h exactly as it was. */}
+      <div className="flex h-[82svh] min-h-0 flex-col overflow-hidden rounded-[30px] border border-[#2A2726] bg-[#111] sm:h-[calc(100dvh-220px)] sm:min-h-[560px]">
+        <div className="flex items-center justify-between border-b border-[#2A2726] px-3.5 py-2.5 sm:px-5 sm:py-4">
           <div>
             <div className="text-[12px] text-white/50">BUILDING</div>
             <div className="text-[17px] font-black text-white">
@@ -572,7 +592,10 @@ export function BuilderView() {
           </button>
         </div>
 
-        <div ref={logRef} className="flex flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5">
+        <div
+          ref={logRef}
+          className="flex min-h-[45svh] flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5 sm:min-h-0"
+        >
           {draft.conversation.map((turn, i) => (
             <div key={i} className="flex flex-col gap-2">
               <AiBubble text={turn.question} />
@@ -702,7 +725,7 @@ export function BuilderView() {
         </div>
 
         {!isDone && !ageBlocked && !enhanceOffer && !doneLineVisible && !identityBatch && (
-          <div className="relative border-t border-[#2A2726] px-4 py-3.5">
+          <div className="relative border-t border-[#2A2726] px-3 py-2.5 sm:px-4 sm:py-3.5">
             {skipMenuOpen && (
               <>
                 <button
@@ -735,6 +758,7 @@ export function BuilderView() {
 
             <div className="flex flex-col gap-2.5 sm:flex-row">
               <textarea
+                ref={textareaRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
@@ -745,7 +769,8 @@ export function BuilderView() {
                 }}
                 disabled={!pending || isThinking}
                 placeholder="Type naturally — you don't need the perfect words."
-                className="max-h-[150px] min-h-[52px] w-full flex-1 resize-none rounded-2xl border border-[#2A2726] bg-[#181615] px-3.5 py-3 text-white transition-[height] duration-150 ease-out placeholder:text-white/30 disabled:opacity-50"
+                rows={1}
+                className="max-h-[84px] min-h-[40px] w-full flex-1 resize-none overflow-y-auto rounded-2xl border border-[#2A2726] bg-[#181615] px-3.5 py-2.5 text-white transition-[height] duration-150 ease-out placeholder:text-white/30 disabled:opacity-50 sm:max-h-[150px] sm:min-h-[52px] sm:py-3"
               />
               <div className="flex gap-2.5 sm:contents">
                 <button
@@ -768,13 +793,13 @@ export function BuilderView() {
             </div>
 
             {pending?.quickReplies && pending.quickReplies.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-2">
+              <div className="mt-2.5 flex flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0">
                 {pending.quickReplies.map((reply) => (
                   <button
                     key={reply}
                     type="button"
                     onClick={() => handleSend(reply)}
-                    className="rounded-full border border-[#2A2726] bg-[#1F1B1A] px-3 py-2 text-[12px] text-[#DDD4CC] hover:bg-[#262220]"
+                    className="shrink-0 rounded-full border border-[#2A2726] bg-[#1F1B1A] px-3 py-2 text-[12px] text-[#DDD4CC] hover:bg-[#262220]"
                   >
                     {reply}
                   </button>
