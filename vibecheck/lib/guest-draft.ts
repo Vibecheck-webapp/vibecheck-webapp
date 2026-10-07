@@ -15,12 +15,14 @@ export interface DraftTurn {
 // original words" can always restore it. `source_index` is this slide's
 // index in the GuestDraft.conversation it came from — a later step maps
 // slides -> StorySlide[] (for StoryViewer) and, on real submission, to
-// profiles.prompts.
+// profiles.prompts. `null` means the slide was typed directly on the
+// summary review screen via "Add an answer" rather than produced by the
+// AI from a conversation turn — see /create/summary's add-answer control.
 export interface DraftSlide {
   question: string;
   answer: string;
   originalAnswer: string;
-  source_index: number;
+  source_index: number | null;
 }
 
 // The AI-generated (and then user-reviewed/edited) story built from a

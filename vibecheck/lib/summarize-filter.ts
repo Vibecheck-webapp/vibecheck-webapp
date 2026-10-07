@@ -1,4 +1,4 @@
-import { SCRIPTED_OPENING_QUESTIONS } from "@/lib/builder-constants";
+import { isNonAnswerPhrase, SCRIPTED_OPENING_QUESTIONS } from "@/lib/builder-constants";
 import type { DraftTurn } from "@/lib/guest-draft";
 
 export interface UsableTurn {
@@ -19,11 +19,14 @@ const SCRIPTED_QUESTION_TEXT = new Set(SCRIPTED_OPENING_QUESTIONS.map((q) => q.q
 
 // Everything the model is allowed to see and everything the output is
 // allowed to reference. A turn is "usable" only if the user actually
-// answered it (not skipped, not excluded — see DraftTurnStatus) and it
-// isn't one of the scripted name/age turns, which are never profile
-// content. This is the single choke point both the request (what gets
-// sent to the model) and the response (what's allowed to come back) are
-// filtered through, so an excluded answer has no path to either.
+// answered it (not skipped, not excluded — see DraftTurnStatus), it isn't
+// one of the scripted name/age turns (never profile content), and it isn't
+// an exact non-answer phrase ("idk", "nothing", etc. — see
+// isNonAnswerPhrase) — those are dropped here too, so no non-answer and no
+// skipped/excluded turn ever reaches the model or a slide. This is the
+// single choke point both the request (what gets sent to the model) and
+// the response (what's allowed to come back) are filtered through, so an
+// excluded answer has no path to either.
 export function filterUsableTurns(conversation: DraftTurn[]): UsableTurn[] {
   return conversation
     .map((turn, index) => ({ turn, index }))
@@ -32,6 +35,7 @@ export function filterUsableTurns(conversation: DraftTurn[]): UsableTurn[] {
         turn.status === "answered" && typeof turn.answer === "string" && turn.answer.trim().length > 0,
     )
     .filter(({ turn }) => !SCRIPTED_QUESTION_TEXT.has(turn.question))
+    .filter(({ turn }) => !isNonAnswerPhrase(turn.answer))
     .map(({ turn, index }) => ({ index, question: turn.question, answer: (turn.answer as string).trim() }));
 }
 

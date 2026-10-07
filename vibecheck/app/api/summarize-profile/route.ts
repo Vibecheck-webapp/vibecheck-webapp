@@ -63,6 +63,18 @@ export interface SummaryResult {
   slides: SummarySlide[];
 }
 
+// Returned instead of calling the model at all when there isn't enough
+// usable material to build even the minimum SLIDES_MIN slides — distinct
+// from an error: it's an expected, valid outcome the client renders as its
+// own "not enough yet" state (with an add-answer control), not a failure.
+export interface NotEnoughResult {
+  notEnough: true;
+  name: string | null;
+  usableCount: number;
+}
+
+const MIN_USABLE_FOR_SUMMARY = 2;
+
 function buildIndexedTranscript(usable: UsableTurn[]): string {
   return usable.map((t) => `${t.index}. Q: ${t.question}\n   A: ${t.answer}`).join("\n");
 }
@@ -77,11 +89,13 @@ c. When choosing which answers become slides, prefer the most distinctive and sp
 d. Never state or imply a sensitive attribute — health, religion, sexual orientation, ethnicity, or finances — unless the user explicitly said it themselves in one of the answers given to you.
 e. Tone: ${CONTEXT_TONE[context]}. This affects word choice only — it must never add content that isn't in their answers.
 f. Respond with ONLY a JSON object, no other text, no markdown fences.
+g. Never pad a short answer to make the slide feel fuller or more substantial — a short, punchy answer deserves a short, punchy slide. Example: if the whole answer was "Football, always.", the slide should read "Football, always." not an invented paragraph about why or what it means to them.
+h. Every slide comes from exactly ONE answer. Never merge content from two different answers into a single slide, and never split one answer across two slides.
 
 Respond with ONLY a json object matching this exact shape:
-{"name": "their name if they stated it, or null", "headline": "one short punchy line, max 80 characters", "bio": "2-4 sentences summarizing them, max 400 characters", "vibe_tags": ["up to 5 short tags"], "interests": ["up to 12 short interest/topic words or phrases"], "slides": [{"question": "<copied exactly from an item below>", "answer": "<their answer, rewritten per rule b>", "source_index": <that item's index number>}]}
+{"name": "their name if they stated it, or null", "headline": "one short punchy line, max 80 characters", "bio": "2-4 sentences summarizing them, max 400 characters", "vibe_tags": ["up to 5 short tags"], "interests": ["up to 12 short interest/topic words or phrases"], "slides": [{"question": "<copied exactly from an item below>", "answer": "<their answer, rewritten per rules b, g, h>", "source_index": <that item's index number>}]}
 
-Include about 4 slides — at least 2, at most 5 — picking the best answers per rule c. Every "source_index" must be one of the index numbers given below.`;
+Include about 4 slides — at least 2, at most 5 — picking the best answers per rule c, one slide per answer per rule h. Every "source_index" must be one of the index numbers given below.`;
 }
 
 // Manual validation (no schema library in this project) — re-derives every
@@ -187,11 +201,9 @@ export async function POST(request: Request) {
   const usable = filterUsableTurns(conversation);
   const scriptedName = extractScriptedName(conversation);
 
-  if (usable.length === 0) {
-    return NextResponse.json(
-      { error: "Not enough answered questions to build a profile yet." },
-      { status: 400 },
-    );
+  if (usable.length < MIN_USABLE_FOR_SUMMARY) {
+    const notEnough: NotEnoughResult = { notEnough: true, name: scriptedName, usableCount: usable.length };
+    return NextResponse.json(notEnough);
   }
 
   if (MOCK_MODE) {
