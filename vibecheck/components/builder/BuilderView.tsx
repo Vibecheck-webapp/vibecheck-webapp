@@ -102,8 +102,8 @@ export function BuilderView() {
   const requestAbortRef = useRef<AbortController | null>(null);
 
   // Resume an in-progress draft if one exists; otherwise start a fresh one
-  // from the ?context= the picker sent us. Runs once on mount only.
-  useEffect(() => {
+  // from the ?context= the picker sent us.
+  const syncDraftFromStorage = useCallback(() => {
     const existing = loadDraft();
     // A draft that already has a summary is past the builder — the only
     // way back in is "Start a new Vibecheck" on the home page, which clears
@@ -114,9 +114,6 @@ export function BuilderView() {
       return;
     }
     if (existing) {
-      // localStorage can't be read during SSR/first paint without a
-      // hydration mismatch, so this has to happen post-mount in an effect.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDraft(existing);
       return;
     }
@@ -128,8 +125,29 @@ export function BuilderView() {
     const fresh = createDraft(contextParam);
     saveDraft(fresh);
     setDraft(fresh);
+  }, [router, searchParams]);
+
+  // localStorage can't be read during SSR/first paint without a hydration
+  // mismatch, so this has to happen post-mount in an effect. Runs once on
+  // mount only.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    syncDraftFromStorage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // iOS Safari can restore this page from the back-forward cache (e.g.
+  // navigating away mid-conversation, then back) without re-running the
+  // mount effect above at all — pageshow with persisted:true is the signal
+  // that happened, so the draft gets re-read fresh instead of this page
+  // continuing to show whatever was true when it was first cached.
+  useEffect(() => {
+    function handlePageShow(e: PageTransitionEvent) {
+      if (e.persisted) syncDraftFromStorage();
+    }
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, [syncDraftFromStorage]);
 
   // Shows the static done-line, then (after it clears — see the effect
   // below) either the get_to_know identity batch or the final card. Wrapped
