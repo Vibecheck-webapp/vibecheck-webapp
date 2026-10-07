@@ -54,6 +54,43 @@ export const SCRIPTED_OPENING_QUESTIONS: { question: string; quickReplies?: stri
 // age in friendship/get_to_know is informational only, nothing is blocked.
 export const UNDER_18_AGE_REPLIES = new Set(["13", "14", "15", "16", "17"]);
 
+// A deterministic safety net under the model's own judgment: these exact
+// phrases (trimmed, case-insensitive, trailing punctuation ignored) never
+// count as slide-worthy material and never count as a topic being
+// answered, no matter what the model itself decides — see
+// generate-question/route.ts's stripping pass and summarize-filter.ts's
+// own filtering. The model is additionally asked to use its own judgment
+// for every other phrasing that amounts to the same thing (e.g. "I
+// genuinely don't know", "can't think of anything") — this list only
+// covers the common exact cases a server-side check can catch for free.
+// Never applied to the two SCRIPTED_OPENING_QUESTIONS above (dating's name
+// and age) — those never reach the model or this check in the first place.
+export const NON_ANSWER_PHRASES = new Set([
+  "idk",
+  "nothing",
+  "no",
+  "not sure",
+  "pass",
+  "hard to put into words",
+  "no idea",
+  "nothing really",
+  "i'm just normal",
+  "im just normal",
+]);
+
+// Trims, lowercases, and drops trailing punctuation (".", "!", "?", "...")
+// before comparing against NON_ANSWER_PHRASES, so "idk." / "No!" / "pass…"
+// still match the exact phrase they're a punctuation variant of.
+export function isNonAnswerPhrase(answer: string | null | undefined): boolean {
+  if (!answer) return false;
+  const normalized = answer
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?…]+$/, "")
+    .trim();
+  return NON_ANSWER_PHRASES.has(normalized);
+}
+
 // get_to_know's post-wildcard "optional identity details" batch (see its
 // spec). Keyed so the client (rendering the chip batch and building each
 // resulting DraftTurn's question text) and generate-question's system

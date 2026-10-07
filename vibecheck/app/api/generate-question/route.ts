@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import {
   countSlideMaterial,
   IDENTITY_FIELDS,
+  isNonAnswerPhrase,
   MAX_BUILDER_TURNS,
   POST_CAP_TURN_ALLOWANCE,
+  SCRIPTED_OPENING_QUESTIONS,
   SLIDE_MATERIAL_MIN,
   SLIDE_MATERIAL_PREFIX,
   SLIDE_MATERIAL_TARGET,
@@ -118,7 +120,7 @@ function buildTranscript(conversation: RequestTurn[]): string {
 const SLIDE_RULE = `STOPPING — CONTENT, NOT A QUESTION COUNT
 Don't fill a quota of questions. Your job is to gather ${SLIDE_MATERIAL_MIN}-${SLIDE_MATERIAL_TARGET} distinct, specific, slide-worthy pieces of material, then stop. Each finished profile becomes a short story of 4-5 slides, and every slide is built from exactly ONE of their answers — so the material has to be spread across that many different answers.
 - Slide-worthy = specific and quotable: a concrete detail, story, habit, opinion, or preference in their own words that could stand alone on a slide (e.g. "I've lost every amateur baking contest I've entered", "my perfect Sunday is a 6am bike ride and a three-hour brunch").
-- NOT slide-worthy: generic or thin answers ("I like music", "I'm pretty chill", "hanging out with friends"), a bare quick-reply pick with nothing added, name/age/pronouns, and anything skipped or declined.
+- NOT slide-worthy: generic or thin answers ("I like music", "I'm pretty chill", "hanging out with friends"), non-answers ("idk", "nothing", "no", "not sure", "pass", "no idea", "nothing really", "I'm just normal", "hard to put into words", and anything that amounts to the same thing), a bare quick-reply pick with nothing added, name/age/pronouns, and anything skipped or declined. A non-answer never counts as slide material and never counts as its topic being answered, no matter how it's phrased.
 - Each answer counts at most ONCE, however rich it is (a slide can't be built from half an answer); a thin answer counts zero. An answer that only repeats material from an earlier answer counts zero.
 - Track them in "extracted" as ONE entry per qualifying answer: "${SLIDE_MATERIAL_PREFIX} Q<n> — <short paraphrase>", where <n> is that answer's number in the transcript (e.g. "${SLIDE_MATERIAL_PREFIX} Q4 — lost every baking contest they entered"). Copy every earlier "${SLIDE_MATERIAL_PREFIX}" entry forward unchanged.
 - You're told the current count every turn. Once it reaches ${SLIDE_MATERIAL_MIN}, finish now unless one more question would fill an obvious, important gap; at ${SLIDE_MATERIAL_TARGET}, always finish. Also finish early if there's clearly little left worth asking.
@@ -152,6 +154,26 @@ function mergeExtracted(previous: string[], next: string[]): string[] {
   return [...next, ...dropped];
 }
 
+// Deterministic safety net on top of the model's own judgment (see
+// NON_ANSWER_PHRASES): strips any "slide: Q<n>" entry whose answer is an
+// exact non-answer phrase, even if the model mistakenly logged it as slide
+// material. Never applied to a scripted opening turn (dating's name/age) —
+// those never produce "slide:" entries to begin with, but this skips them
+// explicitly anyway per the spec.
+const SCRIPTED_QUESTION_TEXT = new Set(SCRIPTED_OPENING_QUESTIONS.map((q) => q.question));
+
+function stripNonAnswerSlideEntries(extracted: string[], conversation: RequestTurn[]): string[] {
+  return extracted.filter((entry) => {
+    const trimmed = entry.trim().toLowerCase();
+    if (!trimmed.startsWith(SLIDE_MATERIAL_PREFIX)) return true;
+    const tag = /^q(\d+)\b/.exec(trimmed.slice(SLIDE_MATERIAL_PREFIX.length).trim());
+    if (!tag) return true;
+    const turn = conversation[Number(tag[1]) - 1];
+    if (!turn || SCRIPTED_QUESTION_TEXT.has(turn.question)) return true;
+    return !isNonAnswerPhrase(turn.answer);
+  });
+}
+
 // ============ DATING ============
 // Dating keeps its own separate prompt/behavior: no enhancement offers, no
 // identity-chip batch (friendship/get_to_know-only additions, see their
@@ -161,10 +183,15 @@ function buildDatingSystemPrompt(): string {
   return `You are Vibecheck, an AI interviewer helping someone build a shareable personality profile.
 Persona for this conversation: ${CONTEXT_PERSONA.dating}
 
-Ask ONE next question that fits naturally after what's already been asked — don't repeat a topic already covered by an answered or declined question, but you may gently re-approach a "skipped for now" topic later if it fits.
+Ask ONE next question that fits naturally after what's already been asked — don't repeat a topic already covered by an answered or declined question, but you may gently re-approach a "skipped for now" topic later if it fits. Never ask about a topic a "tried: <topic>" entry (see below) already covers — that topic is permanently closed, pick a different one.
 When the stopping rule below says you have enough, set "done" to true instead of asking another question.
 If a short set of quick-reply choices would help (e.g. an age range, a yes/no, a short list of options), include 2-6 short options in "quickReplies" — otherwise omit it.
 Keep the question short, conversational, and in character. Never ask for anything that identifies exact real-world location, contact info, or content unsuitable for a 13+ audience.
+
+THIN ANSWERS — ONE NUDGE, THEN MOVE ON: if the user's most recent answer is thin, vague, or a non-answer ("idk", "nothing", "not sure", "pass", "no idea", "nothing really", "I'm just normal", "hard to put into words", and anything that amounts to the same thing — judge the spirit of it, not just this exact list), don't just drift to an unrelated topic, and never point out that their answer was short. Handle it in exactly two phases:
+1. First time for that topic: add a "nudged: <short topic label>" entry to "extracted", then ask ONE easier follow-up on the SAME topic instead of the next new question — make it concrete and low-effort, not a repeat: a specific either/or, or a "for example, X or Y?" framing, with 2-4 quick-reply chips they can just tap. Stay warm, like you're helping them find the words.
+2. If a "nudged: <topic>" entry for that same topic already exists and the new answer is STILL thin/vague/a non-answer (or adds nothing new): add a "tried: <topic>" entry too and move permanently to a different topic — never nudge the same topic twice.
+Neither a thin original answer nor a still-thin nudge-retry answer ever counts as slide-worthy material or as that topic being answered.
 
 ${SLIDE_RULE}
 
@@ -173,7 +200,7 @@ Respond with ONLY a json object, no other text, matching this exact shape:
 or, once you have enough:
 {"done": true, "extracted": ["${SLIDE_MATERIAL_PREFIX} Q3 — short paraphrase"]}
 
-"extracted" must be present on every response: your updated running list of "${SLIDE_MATERIAL_PREFIX}" entries, replacing the list you were given (it may be empty early on).`;
+"extracted" must be present on every response: your updated running list of "${SLIDE_MATERIAL_PREFIX}" entries plus any "nudged: <topic>" / "tried: <topic>" entries from the rule above, replacing the list you were given (it may be empty early on).`;
 }
 
 function buildDatingUserPrompt(conversation: RequestTurn[], extracted: string[], forceDone: boolean): string {
@@ -203,7 +230,12 @@ LENGTH: a few minutes — see the stopping rule below; never a fixed number of q
 - Friendship values: what they value most in a friendship (loyalty, honesty, communication, humour, consistency, emotional support).
 - One wildcard, near the end: something about them people wouldn't guess, an irrational fear, a weirdest habit, or a useless talent.
 
-CRITICAL — extract, don't interrogate, and never repeat a failed beat: a single free-text answer often reveals several of the beats above at once. The running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds two kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), and beats you already tried where the user gave a vague, evasive, or non-answer, marked "tried: <beat>" (e.g. "tried: hobbies/interests"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. If the answer you just received is itself vague/evasive/a non-answer, add a "tried: <beat>" entry for it to "extracted" before moving on. Do not simply work down the beat list in order.
+CRITICAL — extract, don't interrogate, and never repeat a failed beat: a single free-text answer often reveals several of the beats above at once. The running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds three kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), beats mid-retry where the user's last answer was thin/vague/a non-answer and you've already given them ONE easier follow-up, marked "nudged: <beat>", and beats now permanently closed because even that retry didn't land, marked "tried: <beat>" (e.g. "tried: hobbies/interests"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. Do not simply work down the beat list in order.
+
+THIN ANSWERS — ONE NUDGE, THEN MOVE ON: if the answer you just received for a beat is thin, vague, or a non-answer ("idk", "nothing", "not sure", "pass", "no idea", "nothing really", "I'm just normal", "hard to put into words", and anything that amounts to the same thing — judge the spirit of it, not just this exact list), handle it in exactly two phases, and never point out that their answer was short:
+1. First time for that beat: add a "nudged: <beat>" entry, then ask ONE easier follow-up for the SAME beat instead of moving to a new one — make it concrete and low-effort, not a repeat: a specific either/or, or a "for example, X or Y?" framing, with 2-4 quick-reply chips they can just tap. Stay warm, like you're helping them find the words, not quizzing them.
+2. If a "nudged: <beat>" entry already exists for that beat and the new answer is STILL thin/vague/a non-answer (or adds nothing new): add a "tried: <beat>" entry too (keep the "nudged:" one) and move permanently to a different, not-yet-tried beat — never nudge the same beat twice.
+Neither a thin original answer nor a still-thin nudge-retry answer ever counts as slide-worthy material or as that beat being answered.
 
 BASE INFO: ask their name, and informationally their age and pronouns, conversationally and early — phrase it as a natural opening question (e.g. "Tell me a little about you — what should your friends know about you?"), never as a rigid scripted form question. If the conversation is empty (this is your very first question), it must be this kind of open, personality-inviting opener. If the user already stated their name, age, or pronouns naturally in an earlier answer, never ask again — the skip controls already let them decline anything you do ask, so don't press if they skip.
 
@@ -215,7 +247,7 @@ QUICK REPLIES: when a short set of tappable choices would genuinely help, write 
 - Instinct when a friend is having a bad day: "Listen" / "Give advice" / "Make them laugh" / "Show up" / "Give them space" / "Feed them"
 - Friendship values: "Loyalty" / "Good communication" / "Being able to laugh together" / "Showing up" / "Honesty" / "Giving each other space"
 
-ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the rule below instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
+ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the THIN ANSWERS rule above instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
 
 ${SLIDE_RULE}
 
@@ -228,7 +260,7 @@ Respond with ONLY a json object, no other text, matching exactly one of these sh
 {"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
 {"done": true, "extracted": ["short label"]}
 
-"extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, cycling") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
+"extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, cycling"), "nudged: <beat>" entries for beats mid-retry, and "tried: <beat>" entries for beats closed after that retry still didn't land — replacing the list you were given. Keep each entry short, roughly one per line.`;
 }
 
 // ============ GET TO KNOW ============
@@ -240,15 +272,20 @@ Persona for this conversation: ${CONTEXT_PERSONA.get_to_know}
 
 LENGTH: a few minutes — see the stopping rule below; never a fixed number of questions. A rich opening brain-dump alone can cover much of what you need.
 
-OPENING — MOST IMPORTANT RULE: if the conversation is empty (this is your very first question), you MUST open with one large, open "unfiltered version of you" brain-dump invitation — NOT a narrow question. Something like: "Okay, give me the unfiltered version of you. Tell me anything — what you're like, what you're into, what you love, what annoys you, what you do for fun… whatever comes to mind." Expect one big free-text answer back, and extract as much as you can from it (personality, interests, hobbies, social style, likes/dislikes, lifestyle, entertainment, values, quirks, conversation topics) rather than asking a series of narrow follow-ups.
+OPENING — MOST IMPORTANT RULE: if the conversation is empty (this is your very first question), you MUST open with one large, open "unfiltered version of you" brain-dump invitation — NOT a narrow question. Something like: "Okay, give me the unfiltered version of you. Tell me anything — what you're like, what you're into, what you love, what annoys you, what you do for fun… whatever comes to mind." Expect one big free-text answer back, and extract as much as you can from it (personality, interests, hobbies, social style, likes/dislikes, lifestyle, entertainment, values, quirks, conversation topics) rather than asking a series of narrow follow-ups. If that opening answer comes back short or thin — a sentence or less, not much to extract, or a non-answer — don't ask a vague "tell me more": add a "nudged: opening" entry and instead ask ONE message that packs in TWO easy, concrete questions they can answer quickly, each with its own quick-reply chips where that helps (e.g. "No worries, let's start smaller — what's something you do for fun, and what kind of people do you usually click with?"). If that reply is STILL thin, add a "tried: opening" entry and move on to whichever beats below are still open — don't ask a third time.
 
-AFTER THE OPENING — fill only the gaps, and never repeat a failed beat: the running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds two kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), and beats you already tried where the user gave a vague, evasive, or non-answer, marked "tried: <beat>" (e.g. "tried: entertainment personality"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. If the answer you just received is itself vague/evasive/a non-answer, add a "tried: <beat>" entry for it to "extracted" before moving on. Treat the following as beats to draw from, not a script:
+AFTER THE OPENING — fill only the gaps, and never repeat a failed beat: the running "Already extracted" list you're given every turn is your ONLY memory across turns — you don't otherwise remember your own earlier reasoning, so treat it as authoritative, not the transcript. It holds three kinds of entries: real attributes captured so far (e.g. "personality: chill introvert"), beats mid-retry where the user's last answer was thin/vague/a non-answer and you've already given them ONE easier follow-up, marked "nudged: <beat>", and beats now permanently closed because even that retry didn't land, marked "tried: <beat>" (e.g. "tried: entertainment personality"). Before writing your next question: if a "tried:" entry already covers the beat you're about to ask about, STOP — that beat is closed for the rest of this conversation, no matter how unsatisfying the attempt felt; pick a completely different, not-yet-tried beat instead. Never ask about the same beat twice, full stop — this also covers a NARROWER follow-up on a beat they already substantively answered: if their new answer just restates what they already told you with nothing new in it, that beat is done, don't ask an even more specific version of the same question hoping for more detail. Treat the following as beats to draw from, not a script:
 - Their kind of fun: something they could happily spend an entire day doing (hobbies, interests, entertainment, lifestyle).
 - The things they love: something they're currently obsessed with, and optionally one thing they never get tired of.
 - Their people & their energy: what kind of people they get along with, and their own social energy.
 - The little things: something very "them" — a small, specific, shareable personality detail.
 - Entertainment & favourites: their entertainment personality (movies/music/gaming/books/social video), and optionally one favourite they'd recommend to anyone.
 - One wildcard, near the end: something people wouldn't guess about them, their weirdest habit, or a useless talent.
+
+THIN ANSWERS — ONE NUDGE, THEN MOVE ON: if the answer you just received for a beat is thin, vague, or a non-answer ("idk", "nothing", "not sure", "pass", "no idea", "nothing really", "I'm just normal", "hard to put into words", and anything that amounts to the same thing — judge the spirit of it, not just this exact list), handle it in exactly two phases, and never point out that their answer was short:
+1. First time for that beat: add a "nudged: <beat>" entry, then ask ONE easier follow-up for the SAME beat instead of moving to a new one — make it concrete and low-effort, not a repeat: a specific either/or, or a "for example, X or Y?" framing, with 2-4 quick-reply chips they can just tap. Stay warm, like you're helping them find the words, not quizzing them.
+2. If a "nudged: <beat>" entry already exists for that beat and the new answer is STILL thin/vague/a non-answer (or adds nothing new): add a "tried: <beat>" entry too (keep the "nudged:" one) and move permanently to a different, not-yet-tried beat — never nudge the same beat twice.
+Neither a thin original answer nor a still-thin nudge-retry answer ever counts as slide-worthy material or as that beat being answered.
 
 BASE INFO: ask their name conversationally if it hasn't come up yet — it very often appears naturally in the opening brain-dump, in which case never ask again.
 
@@ -258,7 +295,7 @@ QUICK REPLIES: when a short set of tappable choices would genuinely help, write 
 - Social energy: "Very social" / "Selective" / "Quiet until I'm comfortable" / "Depends on the people" / "Chaotic"
 - Entertainment personality: "Movie person" / "Music person" / "Gaming person" / "Books" / "YouTube/TikTok rabbit holes" / "A bit of everything"
 
-ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the rule below instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
+ENHANCEMENT OFFERS: if the user's most recent answer to a key, personality-revealing question HAS some real content but reads as terse or underdeveloped, you may, instead of asking the next question, offer to enhance it: respond with "enhance" instead of "question", containing 2-3 short rewritten versions of THEIR OWN answer. Keep the same meaning and every fact exactly as they gave it — richer phrasing and more of their own voice, never funnier, more impressive, or containing anything they didn't say. Never offer this for a genuine non-answer that has nothing to work with (e.g. "not sure", "I'm just normal", "hard to say") — there's nothing to enhance, so treat it like any other unhelpful answer per the THIN ANSWERS rule above instead. Never offer enhancement for the same answer twice, and never if "skipEnhancement" is true in the request.
 
 ${SLIDE_RULE}
 
@@ -271,7 +308,7 @@ Respond with ONLY a json object, no other text, matching exactly one of these sh
 {"done": false, "enhance": {"options": ["rewritten version 1", "rewritten version 2"]}, "extracted": ["short label"]}
 {"done": true, "knownIdentityFields": ["age"], "extracted": ["short label"]}
 
-"extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, F1") and closed-off "tried: <beat>" entries for beats that got a vague/non-answer — replacing the list you were given. Keep each entry short, roughly one per line.`;
+"extracted" must be present on every response: your updated running list of short entries — "${SLIDE_MATERIAL_PREFIX}" entries per the stopping rule, captured attributes (e.g. "name: Chima", "personality: chill introvert", "into: baking, F1"), "nudged: <beat>" entries for beats mid-retry, and "tried: <beat>" entries for beats closed after that retry still didn't land — replacing the list you were given. Keep each entry short, roughly one per line.`;
 }
 
 function buildAdaptiveUserPrompt(
@@ -416,11 +453,14 @@ export async function POST(request: Request) {
     const question = !forceDone && typeof parsed.question === "string" ? parsed.question : undefined;
     const quickReplies = Array.isArray(parsed.quickReplies) ? parsed.quickReplies.slice(0, 6) : undefined;
 
-    const extracted = mergeExtracted(
-      extractedAttributes,
-      Array.isArray(parsed.extracted)
-        ? parsed.extracted.filter((s: unknown): s is string => typeof s === "string").slice(0, 30)
-        : extractedAttributes,
+    const extracted = stripNonAnswerSlideEntries(
+      mergeExtracted(
+        extractedAttributes,
+        Array.isArray(parsed.extracted)
+          ? parsed.extracted.filter((s: unknown): s is string => typeof s === "string").slice(0, 30)
+          : extractedAttributes,
+      ),
+      conversation,
     );
 
     // Dating never reads the adaptive-only fields below; keeping them out of
