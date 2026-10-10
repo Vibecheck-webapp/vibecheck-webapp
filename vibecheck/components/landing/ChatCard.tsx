@@ -17,7 +17,7 @@ const CARD_PHOTO_SRC = "/orla.png";
 export function ChatCard() {
   return (
     <div
-      className={`w-full max-w-[230px] self-end p-2.5 animate-[card-in_250ms_ease-out] min-[400px]:max-w-[260px] ${bubbleShapeClass(
+      className={`w-70 max-w-full self-end p-2.5 animate-[card-in_250ms_ease-out] ${bubbleShapeClass(
         "me",
       )}`}
     >
@@ -33,8 +33,11 @@ export function ChatCard() {
         />
       </div>
       <div className="mt-2 px-0.5 text-right font-inter text-neutral-900">
-        <p className="text-[16px] font-bold leading-tight">{CARD_CAPTION}</p>
-        <p className="mt-0.5 text-[13px] font-bold text-neutral-900/60">{CARD_LINK_LABEL}</p>
+        {/* whitespace-nowrap: the caption must never wrap onto a second
+            line — the card is sized wide enough (w-[280px] above) to fit
+            it on one line at this font size/weight. */}
+        <p className="text-[16px] font-bold leading-tight whitespace-nowrap">{CARD_CAPTION}</p>
+        <p className="mt-0.5 text-[13px] font-bold whitespace-nowrap text-neutral-900/60">{CARD_LINK_LABEL}</p>
       </div>
     </div>
   );
