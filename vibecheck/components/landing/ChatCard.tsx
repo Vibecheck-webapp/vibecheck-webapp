@@ -1,11 +1,7 @@
 import { bubbleShapeClass } from "@/components/landing/ChatSimulator";
 
-// Wording lives here, not inlined below, so it's a one-line edit. The two
-// facts deliberately set up the very next "them" reply in ChatSimulator's
-// SCRIPT ("You hate carrots too? AND you're a night owl??") — keep them in
-// sync if either changes.
-const CARD_NAME = "Orla, 27";
-const CARD_FACTS = ["🦉 Night owl", "🥕 Hates carrots"];
+// Exact wording — don't reword.
+const CARD_CAPTION = "Roselin Harperton bio-card";
 const CARD_LINK_LABEL = "vibecheck.me";
 
 // The home page's chat simulator "sends" this in place of a real photo
@@ -14,9 +10,10 @@ const CARD_LINK_LABEL = "vibecheck.me";
 const CARD_PHOTO_SRC = "/orla.png";
 
 // Hand-coded replacement for the old /demo-card.svg: that asset
-// letterboxed Orla's (nearly square) photo inside a wide frame with black
-// bars on both sides. This crops it instead (object-cover), so the frame
-// is filled edge to edge.
+// letterboxed the photo inside a wide frame with white blocks on both
+// sides. This crops it instead (object-cover), so the frame is filled
+// edge to edge, with the card's own bubble color showing as a margin
+// around the frame instead of those white blocks.
 export function ChatCard() {
   return (
     <div
@@ -24,25 +21,20 @@ export function ChatCard() {
         "me",
       )}`}
     >
-      <div
-        className="w-full overflow-hidden rounded-2xl"
-        style={{ aspectRatio: "16 / 10" }}
-      >
+      <div className="w-full overflow-hidden rounded-2xl" style={{ aspectRatio: "16 / 10" }}>
         {/* Plain <img>, not next/image: this is a small, fixed local asset
             and next/image's sizing machinery doesn't add anything here. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={CARD_PHOTO_SRC}
-          alt="Orla"
+          alt={CARD_CAPTION}
           className="h-full w-full object-cover"
           style={{ objectPosition: "50% 35%" }}
         />
       </div>
-      <div className="mt-2 px-0.5 font-inter text-neutral-900">
-        <p className="text-[13px] font-extrabold leading-tight">
-          {CARD_NAME} {CARD_FACTS.join(" · ")}
-        </p>
-        <p className="mt-0.5 text-[11px] font-semibold text-neutral-900/60">{CARD_LINK_LABEL}</p>
+      <div className="mt-2 px-0.5 text-right font-inter text-neutral-900">
+        <p className="text-[13px] font-medium leading-tight">{CARD_CAPTION}</p>
+        <p className="mt-0.5 text-[11px] font-medium text-neutral-900/60">{CARD_LINK_LABEL}</p>
       </div>
     </div>
   );
