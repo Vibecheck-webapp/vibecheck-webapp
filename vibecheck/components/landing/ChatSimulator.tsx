@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ChatCard } from "@/components/landing/ChatCard";
 
 // Keep every timing/copy decision here so the animation can be re-tuned
 // without touching the playback or render logic below.
@@ -9,7 +10,7 @@ type Sender = "them" | "me";
 type ChatStep =
   | { type: "typing"; from: Sender; duration: number }
   | { type: "text"; from: Sender; text: string }
-  | { type: "image"; from: "me"; src: string; caption?: string };
+  | { type: "card"; from: "me" };
 
 const SCRIPT: ChatStep[] = [
   { type: "typing", from: "them", duration: 1400 },
@@ -22,7 +23,7 @@ const SCRIPT: ChatStep[] = [
     from: "me",
     text: "Hang on, I'll send you my vibecheck doc. It's easier",
   },
-  { type: "image", from: "me", src: "/demo-card.svg" },
+  { type: "card", from: "me" },
   { type: "typing", from: "them", duration: 900 },
   { type: "text", from: "them", text: "lol 🥺..." },
   { type: "typing", from: "them", duration: 1300 },
@@ -44,14 +45,14 @@ const LOOP_PAUSE_MS = 3000;
 
 type VisibleItem = { id: number } & (
   | { type: "text"; from: Sender; text: string }
-  | { type: "image"; from: "me"; src: string; caption?: string }
+  | { type: "card"; from: "me" }
 );
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function isRenderableStep(step: ChatStep): step is Extract<ChatStep, { type: "text" | "image" }> {
+function isRenderableStep(step: ChatStep): step is Extract<ChatStep, { type: "text" | "card" }> {
   return step.type !== "typing";
 }
 
@@ -77,8 +78,10 @@ function buildFinalItems(): VisibleItem[] {
 let hasPlayedThisLoad = false;
 
 // Shared shape/color so a typing indicator always matches the sender's
-// real message bubble — no separate style to drift out of sync.
-function bubbleShapeClass(from: Sender) {
+// real message bubble — no separate style to drift out of sync. Exported
+// so ChatCard.tsx can reuse the exact "me" bubble color/shape rather than
+// hardcoding a second copy of it that could drift out of sync.
+export function bubbleShapeClass(from: Sender) {
   return from === "me"
     ? "self-end rounded-tl-2xl rounded-tr-2xl rounded-bl-2xl rounded-br-md bg-[#F7BFD6] text-neutral-900"
     : "self-start rounded-tl-2xl rounded-tr-2xl rounded-br-2xl rounded-bl-md bg-[#262626] text-white";
@@ -92,18 +95,6 @@ function TextBubble({ from, text }: { from: Sender; text: string }) {
       )} animate-[bubble-in_200ms_ease-out]`}
     >
       {text}
-    </div>
-  );
-}
-
-function ImageCard({ src, caption }: { src: string; caption?: string }) {
-  return (
-    <div className="w-full max-w-[260px] self-end animate-[card-in_250ms_ease-out]">
-      {/* Plain <img>, not next/image: local SVGs need images.dangerouslyAllowSVG
-          configured before next/image will render them, and this static
-          decorative asset doesn't benefit from the optimizer anyway. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={caption ?? "Vibecheck bio-card"} className="h-auto w-full" />
     </div>
   );
 }
@@ -232,7 +223,7 @@ export function ChatSimulator({ loop = false }: ChatSimulatorProps) {
           item.type === "text" ? (
             <TextBubble key={item.id} from={item.from} text={item.text} />
           ) : (
-            <ImageCard key={item.id} src={item.src} caption={item.caption} />
+            <ChatCard key={item.id} />
           ),
         )}
         {typingFrom && <TypingBubble from={typingFrom} />}
