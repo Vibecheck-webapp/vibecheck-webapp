@@ -797,7 +797,11 @@ export function BuilderView() {
                 disabled={!pending || isThinking}
                 placeholder="Type naturally — you don't need the perfect words."
                 rows={1}
-                className="max-h-[84px] min-h-[40px] w-full flex-1 resize-none overflow-y-auto rounded-2xl border border-[#2A2726] bg-[#181615] px-3.5 py-2.5 text-white transition-[height] duration-150 ease-out placeholder:text-white/30 disabled:opacity-50 sm:max-h-[150px] sm:min-h-[52px] sm:py-3"
+                // text-[16px]: iOS Safari zooms the whole page in on focus
+                // for any input/textarea whose font-size is under 16px —
+                // explicit here since a plain <textarea> otherwise falls
+                // back to the browser's (smaller) UA default.
+                className="max-h-[84px] min-h-[40px] w-full flex-1 resize-none overflow-y-auto rounded-2xl border border-[#2A2726] bg-[#181615] px-3.5 py-2.5 text-[16px] text-white transition-[height] duration-150 ease-out placeholder:text-white/30 disabled:opacity-50 sm:max-h-[150px] sm:min-h-[52px] sm:py-3"
               />
               <div className="flex gap-2.5 sm:contents">
                 <button
@@ -937,7 +941,9 @@ function IdentityFieldRow({
             if (e.key === "Enter" && value.trim()) onAdd(value);
           }}
           placeholder={field.label}
-          className="min-w-0 flex-1 rounded-xl border border-[#2A2726] bg-[#181615] px-3 py-2 text-[13px] text-white placeholder:text-white/30"
+          // text-[16px]: same iOS-zoom-on-focus fix as the main chat
+          // textarea above.
+          className="min-w-0 flex-1 rounded-xl border border-[#2A2726] bg-[#181615] px-3 py-2 text-[16px] text-white placeholder:text-white/30"
         />
         <button
           type="button"
