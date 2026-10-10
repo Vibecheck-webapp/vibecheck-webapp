@@ -578,7 +578,7 @@ export default function CreateSummaryPage() {
               disabled={!canContinue}
               className="h-[48px] w-full text-[15px]"
             >
-              Looks good, continue
+              Continue
             </Button>
           </div>
         </>
@@ -600,7 +600,7 @@ export default function CreateSummaryPage() {
               disabled={!canContinue}
               className="h-[48px] w-full text-[15px]"
             >
-              Looks good, continue
+              Continue
             </Button>
           </div>
         </div>
