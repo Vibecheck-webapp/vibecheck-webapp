@@ -316,7 +316,7 @@ export default function CreateSummaryPage() {
   }
 
   return (
-    <section className="mx-auto w-full max-w-[640px] px-6 pt-12 pb-32 lg:py-16">
+    <section className="mx-auto w-full max-w-[640px] px-6 py-12 lg:py-16">
       <button
         type="button"
         onClick={() => router.push("/create/photo")}
@@ -568,10 +568,7 @@ export default function CreateSummaryPage() {
             </p>
           )}
 
-          {/* Desktop: primary button stays inline at the end of the page,
-              not sticky. Hidden on mobile, where the fixed bar below takes
-              over. */}
-          <div className="mt-8 hidden lg:block">
+          <div className="mt-8">
             <Button
               variant="primary"
               onClick={handleContinue}
@@ -582,28 +579,6 @@ export default function CreateSummaryPage() {
             </Button>
           </div>
         </>
-      )}
-
-      {/* Mobile: primary button pinned to the bottom of the viewport, with
-          a fade behind it so content keeps scrolling underneath — the
-          section's own pb-32 above keeps the last slide clear of it. */}
-      {summary && (
-        <div className="fixed inset-x-0 bottom-0 z-40 lg:hidden">
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black via-black/90 to-transparent backdrop-blur-sm" />
-          <div
-            className="relative px-6 pt-3"
-            style={{ paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}
-          >
-            <Button
-              variant="primary"
-              onClick={handleContinue}
-              disabled={!canContinue}
-              className="h-[48px] w-full text-[15px]"
-            >
-              Continue
-            </Button>
-          </div>
-        </div>
       )}
 
       {showRegenerateConfirm && (
