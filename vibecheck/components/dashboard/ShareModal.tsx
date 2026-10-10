@@ -100,7 +100,7 @@ export function ShareModal({
           </div>
         </div>
 
-        <div className="mt-5 grid gap-2.5">
+        <div className="mt-5 grid grid-cols-1 gap-2.5">
           {VISIBILITY_OPTIONS.map((option) => {
             const isActive = visibility === option;
             return (

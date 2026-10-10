@@ -70,7 +70,7 @@ export function DashboardView({
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.3fr_0.7fr]">
         <Card className="bg-[#141313] p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -86,7 +86,7 @@ export function DashboardView({
             </Button>
           </div>
 
-          <div className="mt-5 grid gap-3">
+          <div className="mt-5 grid grid-cols-1 gap-3">
             {profiles.length === 0 ? (
               <div className="rounded-[20px] border border-dashed border-[#4A4541] bg-[#141313] p-7 text-center">
                 <div className="text-[34px]">✨</div>
@@ -123,7 +123,7 @@ export function DashboardView({
           </p>
         </Card>
 
-        <div className="grid gap-4">
+        <div className="grid grid-cols-1 gap-4">
           <Card className="bg-[#141313] p-5">
             <div className="text-[13px] font-semibold tracking-wide text-white/50 uppercase">
               Quick share

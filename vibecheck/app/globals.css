@@ -26,6 +26,27 @@ body {
   font-family: var(--font-inter);
 }
 
+/* iOS Safari auto-zooms the whole page in when an input/textarea/select is
+   focused if its computed font-size is under 16px — which then leaves the
+   page wider than the viewport (horizontal scroll) until the user zooms
+   back out. Fixing the font-size is the correct fix; the alternative
+   (viewport maximum-scale=1/user-scalable=no) would disable pinch-zoom
+   entirely, which we don't want.
+   This lives outside any @layer on purpose: Tailwind's own utilities
+   (text-xs, text-[14px], etc.) are emitted inside `@layer utilities`, and
+   per the CSS cascade-layers spec, ANY unlayered rule always wins over a
+   layered one regardless of selector specificity — so this one small rule
+   overrides a per-field Tailwind text-size class everywhere, without
+   having to hunt down and edit every input/textarea in the app. Desktop
+   (640px+) is untouched, so no page's look changes beyond this. */
+@media (max-width: 639px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 @keyframes bubble-in {
   from {
     opacity: 0;

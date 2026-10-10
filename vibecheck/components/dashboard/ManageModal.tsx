@@ -70,7 +70,7 @@ export function ManageModal({
           </button>
         </div>
 
-        <div className="mt-4 grid gap-2.5">
+        <div className="mt-4 grid grid-cols-1 gap-2.5">
           <Link href={`/dashboard/profiles/${profile.id}/edit`} className={rowClasses}>
             ✏️ Edit profile
           </Link>
