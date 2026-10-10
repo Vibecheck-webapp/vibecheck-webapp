@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { RefreshIcon } from "@/components/ui/RefreshIcon";
 import {
   isAgeBlocked,
   loadDraft,
@@ -29,6 +30,11 @@ interface SummaryApiResult {
 // Mirrors SLIDES_MAX in summarize-profile/route.ts — the add-answer control
 // can't push a draft past the same ceiling the AI-generated side respects.
 const SLIDES_MAX = 5;
+
+// A deliberate cost/usage cap on the explicit "Regenerate" control, not on
+// the automatic first generation or the error-state "Try again" retry —
+// see GuestDraft.regenerateCount.
+const REGENERATE_MAX = 3;
 
 // Three starting points per context for "Add an answer" — short, concrete
 // prompts likely to surface something specific and shareable, plus a
@@ -70,6 +76,9 @@ export default function CreateSummaryPage() {
   );
   const [addAnswerQuestion, setAddAnswerQuestion] = useState("");
   const [addAnswerText, setAddAnswerText] = useState("");
+  // Shown only when Regenerate is clicked while summary.slides has diverged
+  // from summary.generatedSlides (see hasCustomizations below).
+  const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
 
   // Same guard pattern as /create/photo: no draft, or a dating draft the
   // age gate blocked, never reach this page — reads the same persisted
@@ -133,6 +142,7 @@ export default function CreateSummaryPage() {
           vibe_tags: [],
           interests: [],
           slides: userAdded,
+          generatedSlides: userAdded,
           sourceConversation: current.conversation,
           generatedAt: new Date().toISOString(),
           notEnough: true,
@@ -166,6 +176,7 @@ export default function CreateSummaryPage() {
         vibe_tags: data.vibe_tags ?? [],
         interests: data.interests ?? [],
         slides,
+        generatedSlides: slides,
         sourceConversation: current.conversation,
         generatedAt: new Date().toISOString(),
         notEnough: false,
@@ -273,10 +284,47 @@ export default function CreateSummaryPage() {
 
   const summary = draft.summary;
   const canContinue = !!summary && !!summary.name?.trim() && summary.slides.length >= 2;
+  const regenerateUsesLeft = Math.max(0, REGENERATE_MAX - draft.regenerateCount);
+  // Edited, added, or removed since the last generation — regenerating
+  // would silently discard that, so the confirm dialog warns first. Keyed
+  // on {source_index, answer} pairs in order, which catches all three
+  // cases: a changed answer, a new entry (added), or a missing one
+  // (removed).
+  const hasCustomizations =
+    !!summary &&
+    JSON.stringify(summary.slides.map((s) => ({ source_index: s.source_index, answer: s.answer }))) !==
+      JSON.stringify(summary.generatedSlides.map((s) => ({ source_index: s.source_index, answer: s.answer })));
+
+  function performRegenerate() {
+    const updated: GuestDraft = {
+      ...draft!,
+      regenerateCount: draft!.regenerateCount + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    saveDraft(updated);
+    setDraft(updated);
+    generateSummary(updated);
+  }
+
+  function handleRegenerateClick() {
+    if (status === "loading" || regenerateUsesLeft <= 0) return;
+    if (hasCustomizations) {
+      setShowRegenerateConfirm(true);
+    } else {
+      performRegenerate();
+    }
+  }
 
   return (
-    <section className="mx-auto w-full max-w-[640px] px-6 py-12 lg:py-16">
-      <h1 className="font-inter text-[26px] font-black text-white">Review your Vibecheck</h1>
+    <section className="mx-auto w-full max-w-[640px] px-6 pt-12 pb-32 lg:py-16">
+      <button
+        type="button"
+        onClick={() => router.push("/create/photo")}
+        className="text-[13px] font-semibold text-white/60 hover:text-white"
+      >
+        ← Back
+      </button>
+      <h1 className="mt-3 font-inter text-[26px] font-black text-white">Review your Vibecheck</h1>
       <p className="mt-1.5 text-[14px] text-white/60">
         We turned your answers into a first draft — edit anything that doesn&apos;t sound like you.
       </p>
@@ -358,7 +406,20 @@ export default function CreateSummaryPage() {
             </p>
           )}
 
-          <div className="mt-6 flex flex-col gap-3.5">
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <h2 className="text-[13px] font-bold text-white/70">Your slides</h2>
+            <button
+              type="button"
+              onClick={handleRegenerateClick}
+              disabled={status === "loading" || regenerateUsesLeft <= 0}
+              className="flex shrink-0 items-center gap-1.5 text-[12px] font-semibold text-white/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RefreshIcon />
+              {status === "loading" ? "Regenerating…" : `Regenerate · ${regenerateUsesLeft} left`}
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3.5">
             {summary.slides.map((slide, i) => (
               <Card key={`${slide.source_index}-${i}`} className="bg-[#111] p-5">
                 <div className="flex items-start justify-between gap-3">
@@ -507,28 +568,80 @@ export default function CreateSummaryPage() {
             </p>
           )}
 
-          <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">
-            <Button variant="ghost" onClick={() => router.push("/create/photo")} className="h-[48px] text-[15px]">
-              Back
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => generateSummary(draft)}
-              disabled={status === "loading"}
-              className="h-[48px] text-[15px]"
-            >
-              {status === "loading" ? "Regenerating…" : "Regenerate"}
-            </Button>
+          {/* Desktop: primary button stays inline at the end of the page,
+              not sticky. Hidden on mobile, where the fixed bar below takes
+              over. */}
+          <div className="mt-8 hidden lg:block">
             <Button
               variant="primary"
               onClick={handleContinue}
               disabled={!canContinue}
-              className="h-[48px] flex-1 text-[15px]"
+              className="h-[48px] w-full text-[15px]"
             >
               Looks good, continue
             </Button>
           </div>
         </>
+      )}
+
+      {/* Mobile: primary button pinned to the bottom of the viewport, with
+          a fade behind it so content keeps scrolling underneath — the
+          section's own pb-32 above keeps the last slide clear of it. */}
+      {summary && (
+        <div className="fixed inset-x-0 bottom-0 z-40 lg:hidden">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black via-black/90 to-transparent backdrop-blur-sm" />
+          <div
+            className="relative px-6 pt-3"
+            style={{ paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}
+          >
+            <Button
+              variant="primary"
+              onClick={handleContinue}
+              disabled={!canContinue}
+              className="h-[48px] w-full text-[15px]"
+            >
+              Looks good, continue
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {showRegenerateConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="regenerate-confirm-title"
+            className="w-full max-w-[380px] rounded-[22px] border border-[#2A2726] bg-[#151313] p-6 text-center"
+          >
+            <h2 id="regenerate-confirm-title" className="text-[18px] font-black text-white">
+              Regenerate?
+            </h2>
+            <p className="mt-1.5 text-[13px] text-white/60">
+              Regenerating replaces your edited slides. Your own added answers stay.
+            </p>
+            <div className="mt-5 flex flex-col gap-2.5">
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setShowRegenerateConfirm(false);
+                  performRegenerate();
+                }}
+                className="h-[44px] text-[14px]"
+              >
+                Regenerate
+              </Button>
+              <Button
+                variant="ghost"
+                autoFocus
+                onClick={() => setShowRegenerateConfirm(false)}
+                className="h-[44px] text-[14px]"
+              >
+                Keep going
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

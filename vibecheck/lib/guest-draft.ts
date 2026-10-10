@@ -46,6 +46,14 @@ export interface DraftSummary {
   // slides (source_index null); headline/bio/tags/interests are empty.
   // Optional/falsy for every summary generated before this existed.
   notEnough?: boolean;
+  // Snapshot of `slides` taken immediately after this generation, before
+  // any user edit/add/remove. /create/summary diffs the live `slides`
+  // against this to decide whether "Regenerate" needs to warn that it will
+  // discard edited/removed AI slides (user-added ones always survive
+  // regardless — see generateSummary). Defaults to `slides` itself for a
+  // summary saved before this field existed, so an old draft never shows a
+  // spurious warning the first time it's reopened.
+  generatedSlides: DraftSlide[];
 }
 
 // Shaped to map cleanly onto a future `profiles` insert: `context` is used
@@ -94,6 +102,11 @@ export interface GuestDraft {
   // Clears only by starting a fresh draft (switching vibe type, or the
   // home page's explicit "Start a new Vibecheck").
   ageBlocked: boolean;
+  // How many times the user has explicitly clicked "Regenerate" on
+  // /create/summary for this draft — capped there at REGENERATE_MAX.
+  // Never incremented by the initial automatic generation or by the
+  // error-state "Try again" retry, only by a deliberate regenerate click.
+  regenerateCount: number;
 }
 
 const STORAGE_KEY = "vibecheck:guest-draft:v1";
@@ -130,6 +143,7 @@ export function createDraft(context: ProfileContext): GuestDraft {
     summary: null,
     extractedAttributes: [],
     ageBlocked: false,
+    regenerateCount: 0,
   };
 }
 
@@ -146,12 +160,17 @@ export function loadDraft(): GuestDraft | null {
     } catch {
       // Ignore — photo just comes back empty.
     }
-    // A draft saved before extractedAttributes/ageBlocked existed simply
-    // won't have them.
+    // A draft saved before extractedAttributes/ageBlocked/regenerateCount
+    // existed simply won't have them, and a summary saved before
+    // generatedSlides existed won't have that either.
     return {
       ...parsed,
       extractedAttributes: parsed.extractedAttributes ?? [],
       ageBlocked: parsed.ageBlocked ?? false,
+      regenerateCount: parsed.regenerateCount ?? 0,
+      summary: parsed.summary
+        ? { ...parsed.summary, generatedSlides: parsed.summary.generatedSlides ?? parsed.summary.slides }
+        : null,
       photoDataUrl,
     };
   } catch {
