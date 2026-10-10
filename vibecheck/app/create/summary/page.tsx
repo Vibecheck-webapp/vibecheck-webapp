@@ -405,15 +405,15 @@ export default function CreateSummaryPage() {
             ) : (
               <Card className="bg-[#111] p-5">
                 {addAnswerStep === "picking" && (
-                  <>
+                  <div className="w-full max-w-full">
                     <p className="text-[12px] font-semibold text-white/50">Pick a prompt, or write your own</p>
-                    <div className="mt-2.5 flex flex-wrap gap-2">
+                    <div className="mt-2.5 flex w-full flex-col gap-2">
                       {ADD_ANSWER_SUGGESTIONS[draft.context].map((q) => (
                         <button
                           key={q}
                           type="button"
                           onClick={() => pickSuggestedQuestion(q)}
-                          className="shrink-0 rounded-full border border-[#2A2726] bg-[#1F1B1A] px-3 py-2 text-[12px] text-[#DDD4CC] hover:bg-[#262220]"
+                          className="w-full rounded-2xl border border-[#2A2726] bg-[#1F1B1A] px-3.5 py-2.5 text-left text-[12px] whitespace-normal break-words text-[#DDD4CC] hover:bg-[#262220]"
                         >
                           {q}
                         </button>
@@ -421,7 +421,7 @@ export default function CreateSummaryPage() {
                       <button
                         type="button"
                         onClick={startCustomQuestion}
-                        className="shrink-0 rounded-full border border-[#2A2726] px-3 py-2 text-[12px] text-[#DDD4CC] hover:bg-[#262220]"
+                        className="w-full rounded-2xl border border-[#2A2726] px-3.5 py-2.5 text-left text-[12px] whitespace-normal break-words text-[#DDD4CC] hover:bg-[#262220]"
                       >
                         Write your own question
                       </button>
@@ -433,7 +433,7 @@ export default function CreateSummaryPage() {
                     >
                       Cancel
                     </button>
-                  </>
+                  </div>
                 )}
 
                 {addAnswerStep === "custom-question" && (
