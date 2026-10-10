@@ -33,8 +33,8 @@ export function ChatCard() {
         />
       </div>
       <div className="mt-2 px-0.5 text-right font-inter text-neutral-900">
-        <p className="text-[13px] font-bold leading-tight">{CARD_CAPTION}</p>
-        <p className="mt-0.5 text-[11px] font-bold text-neutral-900/60">{CARD_LINK_LABEL}</p>
+        <p className="text-[16px] font-bold leading-tight">{CARD_CAPTION}</p>
+        <p className="mt-0.5 text-[13px] font-bold text-neutral-900/60">{CARD_LINK_LABEL}</p>
       </div>
     </div>
   );
