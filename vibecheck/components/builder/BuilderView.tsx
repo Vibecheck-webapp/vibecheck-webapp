@@ -377,6 +377,23 @@ export function BuilderView() {
     el.style.height = `${el.scrollHeight}px`;
   }, [inputValue]);
 
+  // The full placeholder no longer fits on one line at 16px in the
+  // textarea's narrower mobile width (full-width, no side-by-side Send/
+  // Skip column there) — it wraps to a second line that the auto-grow
+  // effect above (keyed only on inputValue, so it doesn't re-measure for
+  // this) never accounts for, leaving the wrapped part invisible. A
+  // shorter placeholder below 640px sidesteps that instead of touching
+  // the auto-grow logic or the textarea's height. Desktop's wider layout
+  // was never affected — its placeholder stays the original, longer one.
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const update = () => setIsMobileViewport(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
   function commitTurn(turn: DraftTurn, extraPatch?: Partial<GuestDraft>) {
     if (!draft) return;
     const updated: GuestDraft = {
@@ -595,7 +612,7 @@ export function BuilderView() {
           much the rest of the chrome ends up taking. Desktop (sm:) keeps
           the original calc()/min-h exactly as it was. */}
       <div className="flex h-[82svh] min-h-0 flex-col overflow-hidden rounded-[30px] border border-[#2A2726] bg-[#111] sm:h-[calc(100dvh-220px)] sm:min-h-[560px]">
-        <div className="flex items-center justify-between border-b border-[#2A2726] px-3.5 py-2.5 sm:px-5 sm:py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-[#2A2726] px-3.5 py-2.5 sm:px-5 sm:py-4">
           <div>
             <div className="text-[12px] text-white/50">BUILDING</div>
             <div className="text-[17px] font-black text-white">
@@ -619,9 +636,16 @@ export function BuilderView() {
           </button>
         </div>
 
+        {/* min-h-0 (not a floor like the old mobile min-h-[45svh]): the
+            header and input area below are both shrink-0, so they always
+            get their full needed height first: this is the one flex
+            child that's allowed to give up space when the keyboard makes
+            the card's total height tight, rather than fighting the input
+            area for room and forcing it past the card's overflow-hidden
+            edge (which is what clipped Send/Skip/the chip row before). */}
         <div
           ref={logRef}
-          className="flex min-h-[45svh] flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5 sm:min-h-0"
+          className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-5"
         >
           {draft.conversation.map((turn, i) => (
             <div key={i} className="flex flex-col gap-2">
@@ -752,7 +776,12 @@ export function BuilderView() {
         </div>
 
         {!isDone && !ageBlocked && !enhanceOffer && !doneLineVisible && !identityBatch && (
-          <div className="relative border-t border-[#2A2726] px-3 py-2.5 sm:px-4 sm:py-3.5">
+          // shrink-0: this whole area (textarea, Send/Skip, the chip row)
+          // must never give up height to the log above it — see the log's
+          // own min-h-0 comment. pb-[calc(...)]: clears the home-indicator
+          // safe area on mobile so Send/Skip never sit under it; sm:py-3.5
+          // overrides both on desktop, unchanged from before.
+          <div className="relative shrink-0 border-t border-[#2A2726] px-3 pt-2.5 pb-[calc(12px+env(safe-area-inset-bottom))] sm:px-4 sm:py-3.5">
             {skipMenuOpen && (
               <>
                 <button
@@ -795,7 +824,9 @@ export function BuilderView() {
                   }
                 }}
                 disabled={!pending || isThinking}
-                placeholder="Type naturally — you don't need the perfect words."
+                placeholder={
+                  isMobileViewport ? "Type naturally…" : "Type naturally — you don't need the perfect words."
+                }
                 rows={1}
                 // text-[16px]: iOS Safari zooms the whole page in on focus
                 // for any input/textarea whose font-size is under 16px —
@@ -808,7 +839,7 @@ export function BuilderView() {
                   type="button"
                   onClick={() => handleSend()}
                   disabled={!pending || isThinking || !inputValue.trim()}
-                  className="flex-1 rounded-[14px] bg-[#FF96C3] px-4 py-2.5 text-[14px] font-extrabold text-neutral-900 disabled:opacity-40 sm:flex-none"
+                  className="min-h-11 flex-1 rounded-[14px] bg-[#FF96C3] px-4 py-3 text-[14px] font-extrabold text-neutral-900 disabled:opacity-40 sm:min-h-0 sm:flex-none sm:py-2.5"
                 >
                   Send ↗
                 </button>
@@ -816,7 +847,7 @@ export function BuilderView() {
                   type="button"
                   onClick={() => setSkipMenuOpen((open) => !open)}
                   disabled={!pending || isThinking}
-                  className="flex-1 rounded-[14px] border border-[#2A2726] px-4 py-2.5 text-[14px] font-extrabold text-white/80 disabled:opacity-40 sm:flex-none"
+                  className="min-h-11 flex-1 rounded-[14px] border border-[#2A2726] px-4 py-3 text-[14px] font-extrabold text-white/80 disabled:opacity-40 sm:min-h-0 sm:flex-none sm:py-2.5"
                 >
                   Skip
                 </button>
@@ -824,7 +855,7 @@ export function BuilderView() {
             </div>
 
             {pending?.quickReplies && pending.quickReplies.length > 0 && (
-              <div className="mt-2.5 flex flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0">
+              <div className="mt-2.5 flex min-h-10 flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0">
                 {pending.quickReplies.map((reply) => (
                   <button
                     key={reply}
